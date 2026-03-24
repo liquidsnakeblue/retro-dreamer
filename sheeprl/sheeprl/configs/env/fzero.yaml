@@ -1,0 +1,29 @@
+# F-Zero SNES environment configuration
+defaults:
+  - default
+  - _self_
+
+# Override from default config
+id: F-Zero-go
+num_envs: 1  # Retro only supports single environments
+frame_stack: 4
+frame_skip: 4
+screen_size: 64
+max_episode_steps: 10000
+sync_env: True  # Use sync environment for retro compatibility
+grayscale: False
+capture_video: True
+video_freq: 5000  # Capture video every 5000 steps
+action_repeat: 1
+
+# F-Zero specific wrapper configuration
+wrapper:
+  _target_: sheeprl.envs.fzero_dreamer.FZeroDreamerWrapper
+  id: ${env.id}
+  render_mode: rgb_array
+  screen_size: ${env.screen_size}
+  frame_stack: ${env.frame_stack}
+  frame_skip: ${env.frame_skip}
+  grayscale: ${env.grayscale}
+  game_path: "/root/F-Zero Game Files"
+  initial_state: "go"

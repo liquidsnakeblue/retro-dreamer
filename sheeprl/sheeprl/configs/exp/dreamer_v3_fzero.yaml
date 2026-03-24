@@ -1,0 +1,69 @@
+# @package _global_
+
+defaults:
+  - dreamer_v3
+  - override /algo: dreamer_v3_S
+  - override /env: fzero
+  - _self_
+
+# Experiment
+seed: 42
+
+# Environment
+env:
+  num_envs: 8
+  frame_stack: 4
+  frame_skip: 4
+  max_episode_steps: 10000
+  capture_video: True
+  video_freq: 5000  # Capture video every 5000 steps
+  wrapper:
+    game_path: "/root/F-Zero Game Files"
+    initial_state: "go"
+
+# Checkpoint
+checkpoint:
+  every: 10000
+  save_last: True
+
+# Buffer
+buffer:
+  size: 500_000
+  checkpoint: True
+  memmap: True
+
+# Algorithm
+algo:
+  total_steps: 5_000_000
+  per_rank_batch_size: 16
+  learning_starts: 10000
+  cnn_keys:
+    encoder:
+      - rgb
+  mlp_keys:
+    encoder: []
+  # F-Zero specific params
+  world_model:
+    encoder:
+      cnn_channels_multiplier: 48  # Slightly larger for SNES graphics
+  actor:
+    cls: sheeprl.algos.dreamer_v3.agent.Actor
+    ent_coef: 0.002
+  critic:
+    cls: sheeprl.algos.dreamer_v3.agent.Critic
+  
+# Optimization
+optim:
+  lr: 3e-4
+  eps: 1e-8
+
+# Metric
+metric:
+  log_every: 5000
+  log_video: True
+
+# Fabric (configurable via environment)
+fabric:
+  accelerator: cuda
+  devices: 1
+  precision: 16-mixed

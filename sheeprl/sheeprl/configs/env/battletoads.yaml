@@ -1,0 +1,20 @@
+defaults:
+  - default
+  - _self_
+
+# Override from `default` config
+id: Battletoads-Level1
+action_repeat: 1
+max_episode_steps: 10000
+sync_env: False  # Use AsyncVectorEnv for subprocess isolation (enables num_envs > 1)
+
+# Wrapper to be instantiated
+wrapper:
+  _target_: sheeprl.envs.battletoads.BattletoadsDreamerWrapper
+  id: ${env.id}
+  render_mode: rgb_array
+  screen_size: ${env.screen_size}
+  frame_skip: 4
+  grayscale: False
+  game_path: "/root/Battletoads Game Files"
+  initial_state: "Level1"

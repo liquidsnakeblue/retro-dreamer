@@ -1,0 +1,9 @@
+{
+  "actions": [
+    {"name": "Forward",           "buttons": [1,0,0,0,0,0,0,0,0,0,0,0]},
+    {"name": "Forward+Left",      "buttons": [1,0,0,0,0,0,1,0,0,0,0,0]},
+    {"name": "Forward+Right",     "buttons": [1,0,0,0,0,0,0,1,0,0,0,0]},
+    {"name": "Forward+Left+L",    "buttons": [1,0,0,0,0,0,1,0,0,0,1,0]},
+    {"name": "Forward+Right+R",   "buttons": [1,0,0,0,0,0,0,1,0,0,0,1]}
+  ]
+}

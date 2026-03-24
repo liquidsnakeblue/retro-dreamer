@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+
+# ROMs (never commit)
+games/**/rom.*
+*.sfc
+*.smc
+*.nes
+*.gba
+*.gb
+*.gbc
+*.gen
+*.z64
+*.n64
+*.nds
+*.iso
+
+# IDE
+.vscode/
+.idea/
+
+# Logs and training output
+logs/
+*.log
+sheeprl/sheeprl/logs/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# SheepRL runtime artifacts
+sheeprl/sheeprl/logs/
+sheeprl/sheeprl/_retro_run.py
+
+# Videos / media
+*.mp4
+*.bk2
+*.png
+
+# OS
+.DS_Store
+Thumbs.db
+*:Zone.Identifier

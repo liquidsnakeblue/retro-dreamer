@@ -1,0 +1,30 @@
+# Retro-Dreamer generalized environment configuration
+defaults:
+  - default
+  - _self_
+
+# Override from default config
+id: retro-dreamer
+num_envs: 1
+frame_stack: 4
+frame_skip: 4
+screen_size: 64
+max_episode_steps: 10000
+sync_env: True
+grayscale: False
+capture_video: True
+video_freq: 5000
+action_repeat: 1
+
+# Generalized wrapper configuration — game_id/game_dir/initial_state
+# are passed as Hydra CLI overrides at launch time
+wrapper:
+  _target_: sheeprl.envs.retro_dreamer.RetroDreamerWrapper
+  id: ${env.id}
+  render_mode: rgb_array
+  screen_size: ${env.screen_size}
+  frame_skip: ${env.frame_skip}
+  grayscale: ${env.grayscale}
+  game_id: ???
+  game_dir: ???
+  initial_state: ???

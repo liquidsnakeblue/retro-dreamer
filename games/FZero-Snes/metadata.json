@@ -1,0 +1,8 @@
+{
+  "display_name": "F-Zero (SNES)",
+  "game_id": "FZero-Snes",
+  "system": "Snes",
+  "default_state": "go",
+  "button_layout": ["B", "Y", "Select", "Start", "Up", "Down", "Left", "Right", "A", "X", "L", "R"],
+  "rom_extensions": [".sfc", ".smc"]
+}

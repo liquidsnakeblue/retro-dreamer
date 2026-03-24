@@ -1,0 +1,61 @@
+# @package _global_
+
+defaults:
+  - dreamer_v3
+  - override /algo: dreamer_v3_L
+  - override /env: battletoads
+  - _self_
+
+# Experiment
+seed: 42
+
+# Environment
+env:
+  num_envs: 1
+  action_repeat: 1
+  max_episode_steps: 10000
+  capture_video: True
+  wrapper:
+    game_path: "/root/Battletoads Game Files"
+    initial_state: "Level1"
+    screen_size: 64
+    frame_skip: 4
+    grayscale: False
+
+# Checkpoint
+checkpoint:
+  every: 10000
+
+# Buffer
+buffer:
+  size: 500000
+  checkpoint: True
+  memmap: True
+
+# Algorithm
+algo:
+  total_steps: 5000000
+  cnn_keys:
+    encoder:
+      - rgb
+    decoder:
+      - rgb
+  mlp_keys:
+    encoder: []
+    decoder: []
+  learning_starts: 10000
+  per_rank_batch_size: 32
+  per_rank_sequence_length: 64
+  world_model:
+    encoder:
+      cnn_channels_multiplier: 48
+
+# Metric
+metric:
+  log_every: 1000
+
+# Fabric
+fabric:
+  accelerator: cuda
+  devices: 1
+  precision: bf16-mixed

@@ -1,0 +1,32 @@
+{
+  "reward": {
+    "variables": {
+      "speed": {
+        "mode": "quadratic",
+        "max_speed": 500,
+        "base_reward": 0.1,
+        "scaling_coefficient": 2.0,
+        "power": 2.0,
+        "min_threshold": 50
+      },
+      "health": {
+        "penalty": 0.01
+      },
+      "pos": {
+        "reward": 0.001
+      }
+    }
+  },
+  "done": {
+    "variables": {
+      "health": {
+        "op": "less-than",
+        "reference": 2048
+      },
+      "reverse": {
+        "op": "equal",
+        "reference": 1
+      }
+    }
+  }
+}
