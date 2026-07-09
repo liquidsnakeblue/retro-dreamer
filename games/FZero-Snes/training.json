@@ -21,7 +21,7 @@
     "variables": {
       "health": {
         "op": "less-than",
-        "reference": 2048
+        "reference": 100
       },
       "reverse": {
         "op": "equal",

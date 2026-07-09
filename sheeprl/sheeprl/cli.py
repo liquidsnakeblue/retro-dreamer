@@ -53,6 +53,10 @@ def resume_from_checkpoint(cfg: DictConfig) -> DictConfig:
     # Whether to restore the replay buffer is a per-resume decision (e.g. the
     # buffer files were lost) -- let the CLI override it instead of clobbering.
     old_cfg.buffer.pop("checkpoint", None)
+    # The save state to start from is also a per-resume decision (fine-tuning
+    # a practice-mode brain on a Grand Prix state, save-state curricula).
+    if "wrapper" in old_cfg.get("env", {}):
+        old_cfg.env.wrapper.pop("initial_state", None)
     # Substitute the config with the old one (except for the parameters removed before)
     # because the experiment must continue with the same parameters
     with open_dict(cfg):

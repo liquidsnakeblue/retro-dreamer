@@ -93,6 +93,20 @@ Studio-side fix in the same session: `trainer.list_videos()` now scans ALL run d
 because every eval writes its own `rl-video-episode-0.mp4`, which made the dashboard
 serve the wrong video on click. `/api/videos/{id:path}` serves by id.
 
+10. **`sheeprl/cli.py` — resume also clobbers `env.wrapper.initial_state`.**
+    Added to the resume whitelist so a resume can start from a different save
+    state (fine-tuning the practice-mode brain on the Grand Prix state;
+    save-state curricula later). Without it the CLI override silently reverted
+    to the old run's state.
+
+GP era notes (same session): `games/FZero-Snes/states/gp_knight_beginner.state`
+recorded via scripted menu navigation from power-on (`_retro_gp_probe.py` runs a
+checkpoint on it for one CPU episode). training.json done threshold health<2048 →
+health<100: 2048 is FULL health, so the old rule ended the episode on any contact —
+fine on an empty practice track (it taught perfect wall avoidance), fatal in a
+19-rival pack (probe: dead in 103 steps at health 2024). <100 matches the game's
+own power-empty retire; the health penalty still prices contact.
+
 ## Known-not-patched (watchlist)
 
 - Other algos (p2e, dreamer_v1/v2, PPO, SAC…) still carry 0.29 assumptions — we only
