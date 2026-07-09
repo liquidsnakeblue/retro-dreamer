@@ -188,7 +188,7 @@ def main():
     uvicorn.run(
         "backend.server:app",
         host="0.0.0.0",
-        port=8080,
+        port=int(os.environ.get("RETRO_DREAMER_PORT", "8080")),
         reload=False,
         log_level="info",
     )

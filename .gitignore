@@ -50,3 +50,4 @@ sheeprl/sheeprl/_retro_run.py
 .DS_Store
 Thumbs.db
 *:Zone.Identifier
+sheeprl/_retro_run.py

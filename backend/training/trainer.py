@@ -23,9 +23,10 @@ from .config import TrainingConfig
 from .callbacks import TensorBoardCallback, WebSocketBroadcaster, EpisodeRenderer
 
 
-# SheepRL submodule lives at PROJECT_ROOT/sheeprl/sheeprl/
-# (the outer sheeprl/ is the git submodule root; the inner sheeprl/ is the Python package)
-SHEEPRL_DIR = Path(__file__).resolve().parent.parent.parent / "sheeprl" / "sheeprl"
+# The vendored SheepRL tree lives at PROJECT_ROOT/sheeprl/ (repo root, containing the
+# `sheeprl` Python package). The subprocess runs with this as cwd so `import sheeprl`
+# resolves against the vendored copy without a pip install.
+SHEEPRL_DIR = Path(__file__).resolve().parent.parent.parent / "sheeprl"
 
 # Use the same Python interpreter that is running us (we share a venv)
 SHEEPRL_PYTHON = sys.executable
@@ -44,7 +45,10 @@ _WRAPPER_SCRIPT = (
     "import pyglet; pyglet.options['shadow_window'] = False\n"
     "import torch\n"
     "original_load = torch.load\n"
-    "torch.load = lambda *args, **kwargs: original_load(*args, weights_only=False, **kwargs)\n"
+    "def _patched_torch_load(*args, **kwargs):\n"
+    "    kwargs['weights_only'] = False\n"
+    "    return original_load(*args, **kwargs)\n"
+    "torch.load = _patched_torch_load\n"
     "try:\n"
     "    import lightning.fabric.utilities.cloud_io as cloud_io\n"
     "    def patched_load(path, map_location=None):\n"
@@ -243,6 +247,9 @@ class DreamerV3Trainer:
             SHEEPRL_PYTHON, str(wrapper_path),
             "exp=dreamer_v3_retro",
             f"algo={algo}",
+            # SheepRL defaults root_dir to ${algo.name}/${env.id} ("dreamer_v3/retro-dreamer");
+            # pin it to the game id so _sheeprl_logs()/videos/checkpoints discovery matches
+            f"root_dir=dreamer_v3/{game_id}",
             f"env.wrapper.game_id={game_id}",
             f"env.wrapper.game_dir={abs_game_dir}",
             f"env.wrapper.initial_state={initial_state}",

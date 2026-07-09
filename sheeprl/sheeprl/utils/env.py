@@ -195,11 +195,13 @@ def make_env(
 
             return obs
 
-        env = gym.wrappers.TransformObservation(env, transform_obs)
+        # gymnasium >= 1.0: TransformObservation requires the transformed observation_space up front
+        transformed_spaces = dict(env.observation_space.spaces)
         for k in cnn_keys:
-            env.observation_space[k] = gym.spaces.Box(
+            transformed_spaces[k] = gym.spaces.Box(
                 0, 255, (1 if cfg.env.grayscale else 3, cfg.env.screen_size, cfg.env.screen_size), np.uint8
             )
+        env = gym.wrappers.TransformObservation(env, transform_obs, gym.spaces.Dict(transformed_spaces))
 
         if cnn_keys is not None and len(cnn_keys) > 0 and cfg.env.frame_stack > 1:
             if cfg.env.frame_stack_dilation <= 0:
@@ -223,12 +225,12 @@ def make_env(
             if cfg.env.grayscale:
                 env = GrayscaleRenderWrapper(env)
             video_freq = getattr(cfg.env, "video_freq", 10)
-            env = gym.experimental.wrappers.RecordVideoV0(
+            # gymnasium >= 1.0: RecordVideoV0 moved from gym.experimental.wrappers to gym.wrappers.RecordVideo
+            env = gym.wrappers.RecordVideo(
                 env, os.path.join(run_name, prefix + "_videos" if prefix else "videos"),
                 episode_trigger=lambda ep: ep % video_freq == 0,
                 disable_logger=True,
             )
-            env.metadata["render_fps"] = env.frames_per_sec
         return env
 
     return thunk

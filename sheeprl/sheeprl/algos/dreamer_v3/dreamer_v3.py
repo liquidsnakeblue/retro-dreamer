@@ -396,7 +396,10 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                 ),
             )
             for i in range(cfg.env.num_envs)
-        ]
+        ],
+        # gymnasium >= 1.0: default autoreset is NEXT_STEP; SheepRL expects the
+        # 0.29-style same-step reset with final obs/info delivered in `infos`
+        autoreset_mode=gym.vector.AutoresetMode.SAME_STEP,
     )
     action_space = envs.single_action_space
     observation_space = envs.single_observation_space
@@ -608,19 +611,36 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                         step_data["is_first"][i] = np.ones_like(step_data["is_first"][i])
 
             if cfg.metric.log_level > 0 and "final_info" in infos:
-                for i, agent_ep_info in enumerate(infos["final_info"]):
-                    if agent_ep_info is not None:
-                        ep_rew = agent_ep_info["episode"]["r"]
-                        ep_len = agent_ep_info["episode"]["l"]
+                final_info = infos["final_info"]
+                if isinstance(final_info, dict):
+                    # gymnasium >= 1.0: final_info is recursively merged into a nested
+                    # dict of arrays, each leaf key paired with a `_key` presence mask
+                    ep = final_info.get("episode", {})
+                    ep_mask = np.asarray(ep.get("_r", np.zeros(cfg.env.num_envs, dtype=bool)))
+                    for i in np.flatnonzero(ep_mask):
+                        ep_rew = float(ep["r"][i])
+                        ep_len = float(ep["l"][i])
                         if aggregator and not aggregator.disabled:
                             aggregator.update("Rewards/rew_avg", ep_rew)
                             aggregator.update("Game/ep_len_avg", ep_len)
-                        fabric.print(f"Rank-0: policy_step={policy_step}, reward_env_{i}={ep_rew[-1]}")
+                        fabric.print(f"Rank-0: policy_step={policy_step}, reward_env_{i}={ep_rew}")
+                else:
+                    # gymnasium 0.29: object array of per-env info dicts
+                    for i, agent_ep_info in enumerate(final_info):
+                        if agent_ep_info is not None and "episode" in agent_ep_info:
+                            ep_rew = np.ravel(agent_ep_info["episode"]["r"])
+                            ep_len = np.ravel(agent_ep_info["episode"]["l"])
+                            if aggregator and not aggregator.disabled:
+                                aggregator.update("Rewards/rew_avg", ep_rew)
+                                aggregator.update("Game/ep_len_avg", ep_len)
+                            fabric.print(f"Rank-0: policy_step={policy_step}, reward_env_{i}={ep_rew[-1]}")
 
             # Save the real next observation
+            # gymnasium >= 1.0 (SAME_STEP autoreset) uses "final_obs"; 0.29 used "final_observation"
+            _final_obs_key = "final_obs" if "final_obs" in infos else "final_observation"
             real_next_obs = copy.deepcopy(next_obs)
-            if "final_observation" in infos:
-                for idx, final_obs in enumerate(infos["final_observation"]):
+            if _final_obs_key in infos:
+                for idx, final_obs in enumerate(infos[_final_obs_key]):
                     if final_obs is not None:
                         for k, v in final_obs.items():
                             real_next_obs[k][idx] = v
