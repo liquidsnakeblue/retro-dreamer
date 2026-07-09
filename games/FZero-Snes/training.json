@@ -26,6 +26,10 @@
       "reverse": {
         "op": "equal",
         "reference": 1
+      },
+      "race_on": {
+        "op": "equal",
+        "reference": 0
       }
     }
   }
