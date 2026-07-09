@@ -141,7 +141,7 @@ ffmpeg = subprocess.Popen(
         "-c:a", "aac", "-b:a", "128k",
         "-f", "hls",
         "-hls_time", "1",
-        "-hls_list_size", "10",
+        "-hls_list_size", "30",
         "-hls_flags", "delete_segments+independent_segments",
         str(hls_dir / "live.m3u8"),
     ],
@@ -180,9 +180,22 @@ threading.Thread(target=_writer, args=(v_w, _qv), daemon=True).start()
 threading.Thread(target=_writer, args=(a_w, _qa), daemon=True).start()
 
 
+_stats = {"frames": 0, "samples": 0, "t0": time.perf_counter(), "last_log": 0.0}
+
+
 def on_frame(frame, audio):
     _qv.put(frame.tobytes())
     _qa.put(audio.tobytes())
+    _stats["frames"] += 1
+    _stats["samples"] += len(audio)
+    wall = time.perf_counter() - _stats["t0"]
+    if wall - _stats["last_log"] >= 10:
+        _stats["last_log"] = wall
+        media = _stats["frames"] / 60.0
+        log(
+            f"pace: wall={wall:.1f}s media={media:.1f}s ratio={media / wall:.3f} "
+            f"audio_rate={_stats['samples'] / media:.0f}Hz qv={_qv.qsize()} qa={_qa.qsize()}"
+        )
 
 
 inner.frame_callback = on_frame

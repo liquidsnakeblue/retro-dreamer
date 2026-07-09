@@ -48,7 +48,9 @@ export function LivePlay() {
         await new Promise((res) => setTimeout(res, 500))
       }
       if (!Hls.isSupported()) throw new Error('HLS unsupported in this browser')
-      const hls = new Hls({ liveSyncDurationCount: 3, maxLiveSyncPlaybackRate: 1.05 })
+      // ride ~6s behind the live edge with no rate-chasing: hugging the edge
+      // means any producer clock wobble starves the buffer (stutter ~20s in)
+      const hls = new Hls({ liveSyncDurationCount: 6, maxLiveSyncPlaybackRate: 1.0 })
       hlsRef.current = hls
       hls.loadSource(`${LIVE_BASE}/live/live.m3u8`)
       hls.attachMedia(v)

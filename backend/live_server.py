@@ -61,6 +61,11 @@ def _start_session_locked():
             pass
     env = os.environ.copy()
     env["RETRO_LIVE_HLS_DIR"] = str(HLS_DIR)
+    # CPU inference: a busy training run saturates the GPU and inference
+    # queues behind its kernels (measured 0.93x real-time — stutters at the
+    # live edge). CPU holds 1.0x. Set RETRO_LIVE_GPU=1 to override when no
+    # training is running.
+    env.setdefault("RETRO_LIVE_GPU", "0")
     _session = subprocess.Popen(
         [PYTHON, str(SHEEPRL_DIR / "_retro_live_player.py"), "latest"],
         cwd=str(SHEEPRL_DIR),
