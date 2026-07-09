@@ -37,6 +37,11 @@ def _sheeprl_logs(game_id: str) -> Path:
     return SHEEPRL_DIR / "logs" / "runs" / "dreamer_v3" / game_id
 
 
+# ffprobe is ~100ms per file; without a cache the dashboard's 5s poll runs it
+# on every video every time, stalling the whole (single-loop) server.
+_VIDEO_META_CACHE: dict = {}  # path -> (mtime, duration)
+
+
 # Wrapper script content written to SHEEPRL_DIR at launch time
 _WRAPPER_SCRIPT = (
     "import os\n"
@@ -437,6 +442,10 @@ class DreamerV3Trainer:
         m = re.search(r"step-(\d+)", mp4.name) or re.search(r"episode-(\d+)", mp4.name)
         if m:
             info["step"] = int(m.group(1))
+        cached = _VIDEO_META_CACHE.get(info["path"])
+        if cached is not None and cached[0] == stat.st_mtime:
+            info["duration"] = cached[1]
+            return info
         try:
             import json as _json
             result = subprocess.run(
@@ -446,9 +455,26 @@ class DreamerV3Trainer:
             if result.returncode == 0:
                 fmt = _json.loads(result.stdout).get("format", {})
                 info["duration"] = float(fmt.get("duration", 0))
+            _VIDEO_META_CACHE[info["path"]] = (stat.st_mtime, info["duration"])
         except Exception:
             pass
         return info
+
+    def resolve_video(self, video_id: str) -> Optional[str]:
+        """Resolve a video id (path relative to the game's log dir) to a file path.
+
+        Direct resolution — no directory scan, no ffprobe — so serving video
+        bytes doesn't pay the metadata tax. Refuses paths that escape the
+        game's log dir."""
+        logs = _sheeprl_logs(self.config.game_id).resolve()
+        try:
+            path = (logs / video_id).resolve()
+            path.relative_to(logs)
+        except (ValueError, OSError):
+            return None
+        if path.suffix == ".mp4" and path.is_file():
+            return str(path)
+        return None
 
     def list_checkpoints(self) -> list[dict]:
         """Scan SheepRL's checkpoint directory for the active game."""

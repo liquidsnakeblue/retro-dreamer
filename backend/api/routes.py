@@ -131,8 +131,12 @@ async def get_config():
 # Video / checkpoint endpoints
 # ------------------------------------------------------------------
 
+# Sync (def) routes on purpose: FastAPI runs them in the threadpool, so the
+# directory scan / ffprobe / file IO never block the event loop that is also
+# streaming video bytes and answering status polls.
+
 @router.get("/videos")
-async def list_videos():
+def list_videos():
     """List training videos from SheepRL's output directories."""
     if _trainer is None:
         raise HTTPException(500, "Trainer not initialized")
@@ -140,7 +144,7 @@ async def list_videos():
 
 
 @router.get("/videos/{video_id:path}")
-async def get_video(video_id: str):
+def get_video(video_id: str):
     """Serve a training video by its unique id (run-relative path).
 
     Bare filenames collide — every eval run writes its own
@@ -149,18 +153,17 @@ async def get_video(video_id: str):
     """
     if _trainer is None:
         raise HTTPException(500, "Trainer not initialized")
-    videos = _trainer.list_videos()
-    for v in videos:
-        if v["id"] == video_id:
-            return FileResponse(v["path"], media_type="video/mp4")
-    for v in videos:
+    path = _trainer.resolve_video(video_id)
+    if path:
+        return FileResponse(path, media_type="video/mp4")
+    for v in _trainer.list_videos():
         if v["filename"] == video_id:
             return FileResponse(v["path"], media_type="video/mp4")
     raise HTTPException(404, "Video not found")
 
 
 @router.get("/episodes")
-async def list_episodes():
+def list_episodes():
     """List training videos (alias for /videos)."""
     if _trainer is None:
         raise HTTPException(500, "Trainer not initialized")
