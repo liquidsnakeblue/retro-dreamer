@@ -258,6 +258,9 @@ class MemmapArray(np.lib.mixins.NDArrayOperatorsMixin):
             tmpfile = _TemporaryFileWrapper(None, filename, delete=False)
             tmpfile.name = filename
             tmpfile._closer.name = filename
+            # file is None — mark it already closed so exit-time cleanup doesn't
+            # call None.close() and print "Exception ignored" tracebacks
+            tmpfile._closer.close_called = True
             state["_file"] = tmpfile
         self.__dict__.update(state)
 

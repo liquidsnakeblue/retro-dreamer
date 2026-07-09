@@ -70,7 +70,8 @@ export function EpisodePlayer({ videos }: EpisodePlayerProps) {
       {selectedVideo && (
         <div className="border-b border-retro-border bg-black/40 shrink-0">
           <video
-            src={`/api/videos/${selectedVideo}`}
+            key={selectedVideo}
+            src={`/api/videos/${encodeURI(selectedVideo)}`}
             controls
             autoPlay
             loop
@@ -94,16 +95,16 @@ export function EpisodePlayer({ videos }: EpisodePlayerProps) {
         {videos.length === 0 ? (
           <div className="text-center py-10 text-retro-text-dim text-xs px-4">
             <p className="text-lg mb-1 opacity-20">No videos yet</p>
-            <p className="text-[10px]">Videos are captured every 200 env steps during training</p>
+            <p className="text-[10px]">Recorded every 10 episodes or 10k env steps during training</p>
           </div>
         ) : (
           <div className="divide-y divide-retro-border/50">
             {videos.map((video) => {
-              const isSelected = selectedVideo === video.filename
+              const isSelected = selectedVideo === video.id
               return (
                 <button
-                  key={video.filename}
-                  onClick={() => setSelectedVideo(video.filename)}
+                  key={video.id}
+                  onClick={() => setSelectedVideo(video.id)}
                   className={`w-full text-left px-3 py-2.5 transition-colors ${
                     isSelected
                       ? 'bg-retro-accent/10'
@@ -113,6 +114,11 @@ export function EpisodePlayer({ videos }: EpisodePlayerProps) {
                   <div className="flex items-center justify-between gap-2">
                     {/* Step badge */}
                     <div className="flex items-center gap-2 min-w-0">
+                      {video.source === 'eval' && (
+                        <span className="text-[10px] font-semibold bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded shrink-0">
+                          EVAL
+                        </span>
+                      )}
                       <span className="text-[10px] font-mono bg-retro-surface px-1.5 py-0.5 rounded text-retro-accent shrink-0">
                         {formatStep(video.step)}
                       </span>

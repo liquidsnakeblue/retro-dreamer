@@ -17,6 +17,8 @@ export interface TrainingStatus {
 }
 
 export interface VideoInfo {
+  id: string
+  source: 'train' | 'eval'
   filename: string
   path: string
   size_mb: number

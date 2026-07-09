@@ -224,11 +224,17 @@ def make_env(
         if cfg.env.capture_video and rank == 0 and vector_env_idx == 0 and run_name is not None:
             if cfg.env.grayscale:
                 env = GrayscaleRenderWrapper(env)
-            video_freq = getattr(cfg.env, "video_freq", 10)
+            # OmegaConf returns None (not AttributeError) for missing keys,
+            # so getattr defaults never fire — use `or` fallbacks.
+            video_freq = getattr(cfg.env, "video_freq", None) or 10
+            # Episode trigger alone starves once episodes get long (a 10k-step
+            # episode on env 0 = ~50min wall time), so also record on a step cadence.
+            video_step_freq = getattr(cfg.env, "video_step_freq", None) or 10000
             # gymnasium >= 1.0: RecordVideoV0 moved from gym.experimental.wrappers to gym.wrappers.RecordVideo
             env = gym.wrappers.RecordVideo(
                 env, os.path.join(run_name, prefix + "_videos" if prefix else "videos"),
                 episode_trigger=lambda ep: ep % video_freq == 0,
+                step_trigger=lambda step: step % video_step_freq == 0,
                 disable_logger=True,
             )
         return env

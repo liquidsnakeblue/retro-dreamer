@@ -391,41 +391,41 @@ class DreamerV3Trainer:
         return latest
 
     def list_videos(self) -> list[dict]:
-        """Scan SheepRL's video directories for training videos."""
+        """Scan SheepRL's video directories for training videos.
+
+        Scans ALL run dirs for the active game (not just the latest) so
+        replays survive checkpoint resumes, which start a new run dir.
+        Every video gets a unique ``id`` (path relative to the game's log
+        dir) — bare filenames collide: each eval writes its own
+        rl-video-episode-0.mp4.
+        """
+        logs = _sheeprl_logs(self.config.game_id)
+        if not logs.exists():
+            return []
+
         videos = []
-        run_dir = self.get_run_dir()
-        if not run_dir:
-            return videos
+        for run_dir in logs.glob("*/version_*/"):
+            for video_dir in [run_dir / "train_videos", run_dir / "videos"]:
+                if video_dir.exists():
+                    for mp4 in video_dir.glob("*.mp4"):
+                        videos.append(self._video_info(mp4, logs, "train"))
+            eval_dir = run_dir / "evaluation"
+            if eval_dir.exists():
+                for vdir in eval_dir.glob("version_*/test_videos"):
+                    for mp4 in vdir.glob("*.mp4"):
+                        videos.append(self._video_info(mp4, logs, "eval"))
 
-        # Check train_videos and evaluation videos
-        for video_dir in [run_dir / "train_videos", run_dir / "videos"]:
-            if video_dir.exists():
-                for mp4 in sorted(
-                    video_dir.glob("*.mp4"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                ):
-                    videos.append(self._video_info(mp4))
-
-        # Also check evaluation subdirectories
-        eval_dir = run_dir / "evaluation"
-        if eval_dir.exists():
-            for vdir in sorted(eval_dir.glob("version_*/test_videos"), reverse=True):
-                for mp4 in sorted(
-                    vdir.glob("*.mp4"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                ):
-                    videos.append(self._video_info(mp4))
-
+        videos.sort(key=lambda v: v["modified"], reverse=True)
         return videos[:20]  # most recent 20
 
     @staticmethod
-    def _video_info(mp4: Path) -> dict:
+    def _video_info(mp4: Path, base_dir: Path, source: str) -> dict:
         """Extract metadata from a video file."""
         import re
         stat = mp4.stat()
         info = {
+            "id": str(mp4.relative_to(base_dir)),
+            "source": source,
             "filename": mp4.name,
             "path": str(mp4),
             "size_mb": stat.st_size / 1e6,

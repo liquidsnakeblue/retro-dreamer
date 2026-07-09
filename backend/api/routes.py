@@ -139,14 +139,22 @@ async def list_videos():
     return _trainer.list_videos()
 
 
-@router.get("/videos/{filename}")
-async def get_video(filename: str):
-    """Serve a training video file."""
+@router.get("/videos/{video_id:path}")
+async def get_video(video_id: str):
+    """Serve a training video by its unique id (run-relative path).
+
+    Bare filenames collide — every eval run writes its own
+    rl-video-episode-0.mp4 — so id is the reliable key; filename
+    match kept as a fallback for old clients.
+    """
     if _trainer is None:
         raise HTTPException(500, "Trainer not initialized")
     videos = _trainer.list_videos()
     for v in videos:
-        if v["filename"] == filename:
+        if v["id"] == video_id:
+            return FileResponse(v["path"], media_type="video/mp4")
+    for v in videos:
+        if v["filename"] == video_id:
             return FileResponse(v["path"], media_type="video/mp4")
     raise HTTPException(404, "Video not found")
 

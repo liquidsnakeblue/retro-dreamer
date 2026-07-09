@@ -64,6 +64,35 @@ state is recorded here.
    `dreamer_v3.py` for buffer-stripped checkpoints, and `resume_prefill` in the studio
    API (`buffer.checkpoint=false` + `algo.learning_starts=N` on resume).
 
+7. **`sheeprl/utils/env.py` — video recording starves on long episodes.**
+   `RecordVideo` was episode-trigger-only (every 10 episodes on env 0). Once the agent
+   stops dying, episodes run to the 10k-step TimeLimit (~50 min wall each on env 0) →
+   next video ~8 h away; the dashboard's Episode Replays froze for hours. Added a
+   `step_trigger` (every `env.video_step_freq` env-0 steps, default 10k) alongside the
+   episode trigger — gymnasium runs both; whichever fires first starts a recording.
+   ⚠️ OmegaConf gotcha: missing keys return **None** instead of raising, so
+   `getattr(cfg.env, "key", default)` NEVER uses the default — must `or`-fallback.
+   The first version did `step % None` → worker crash masked by two more bugs (below).
+
+8. **`sheeprl/envs/wrappers.py` — RestartOnException masks crashes whose message
+   contains `%`.** `gym.logger.warn(msg)` treats msg as a %-format string; an exception
+   message containing `%` (e.g. `unsupported operand type(s) for %: ...`) raises
+   `TypeError: not enough arguments for format string` INSIDE the crash handler,
+   killing the async worker and hiding the real error. Escaped `%` → `%%` in both
+   handlers. Debug recipe that surfaced it: rerun with `env.sync_env=true
+   env.num_envs=1` so exceptions propagate instead of dying in Worker-N.
+
+9. **`sheeprl/utils/memmap.py` — silence exit-time tempfile spam from patch 5.**
+   The `delete=False` wrapper holds `file=None`; interpreter-exit cleanup called
+   `None.close()` → "Exception ignored" tracebacks polluting every eval. Set
+   `_closer.close_called = True` (nothing to close; deletion semantics unchanged).
+
+Studio-side fix in the same session: `trainer.list_videos()` now scans ALL run dirs
+(replays survive resume, which starts a new run dir) and returns a unique `id`
+(run-relative path) per video plus `source` (train/eval) — bare filenames collide
+because every eval writes its own `rl-video-episode-0.mp4`, which made the dashboard
+serve the wrong video on click. `/api/videos/{id:path}` serves by id.
+
 ## Known-not-patched (watchlist)
 
 - Other algos (p2e, dreamer_v1/v2, PPO, SAC…) still carry 0.29 assumptions — we only
