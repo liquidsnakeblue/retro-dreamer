@@ -307,16 +307,28 @@ class DreamerV3Trainer:
             return
 
         last_line = ""
-        try:
-            for line in proc.stdout:
-                line = line.rstrip()
-                if line:
-                    last_line = line
-                    self.metrics.parse_log_line(line)
-                    self._log_lines.append(line)
-                    print(f"[SheepRL] {line}")
-        except Exception:
-            pass
+        # Read until EOF. A single bad line (decode error, parse bug) must never
+        # kill this thread: it is also responsible for detecting process exit.
+        while True:
+            try:
+                line = proc.stdout.readline()
+            except Exception as exc:
+                print(f"[Trainer] stdout read error (continuing): {exc!r}")
+                if proc.poll() is not None:
+                    break
+                continue
+            if line == "":  # EOF — process closed stdout
+                break
+            line = line.rstrip()
+            if not line:
+                continue
+            last_line = line
+            try:
+                self.metrics.parse_log_line(line)
+            except Exception as exc:
+                print(f"[Trainer] metric parse error on {line!r}: {exc!r}")
+            self._log_lines.append(line)
+            print(f"[SheepRL] {line}")
 
         exit_code = proc.wait()
         if exit_code != 0 and self.state == TrainingState.TRAINING:
