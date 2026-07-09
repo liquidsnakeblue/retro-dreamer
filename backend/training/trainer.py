@@ -276,6 +276,10 @@ class DreamerV3Trainer:
                 print(f"[Trainer] Resuming from: {resume_ckpt}")
 
         env = os.environ.copy()
+        # Child stdout is a pipe → Python block-buffers it. During long-episode
+        # phases output is sparse and sits unflushed for hours, freezing the
+        # dashboard (looks identical to a hang). Force per-line flushing.
+        env["PYTHONUNBUFFERED"] = "1"
         env["CUDA_VISIBLE_DEVICES"] = "0"
         env["PYOPENGL_PLATFORM"] = "egl"
         env["PYGLET_HEADLESS"] = "1"

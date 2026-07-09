@@ -32,6 +32,14 @@ state is recorded here.
 
 ## Studio-side fixes (same session, backend/ not sheeprl/)
 
+- `trainer.py`: **child stdout block-buffering** — the root cause of the studio "going
+  blind" mid-run. The subprocess's stdout is a pipe, so Python block-buffers it (~8KB);
+  once the agent stops dying, episode-end prints become sparse (minutes-to-hours apart)
+  and sit unflushed — status/logs freeze in a way indistinguishable from a hang. Fix:
+  `PYTHONUNBUFFERED=1` in the child env. (The reader-thread hardening committed just
+  before this was good hygiene but was NOT the actual cause; evidence: checkpoint files
+  appeared on disk while their "Saving checkpoint" lines never crossed the pipe.)
+
 - `trainer.py`: `SHEEPRL_DIR` pointed at the inner package dir — `import sheeprl` could
   never resolve; the studio had never successfully launched a subprocess on this machine.
 - `trainer.py`: launch command now pins `root_dir=dreamer_v3/<game_id>` (SheepRL defaults
