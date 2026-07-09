@@ -65,6 +65,10 @@ class TrainingConfig:
     # Replay buffer
     replay_capacity: int = 1_000_000
     prefill_steps: int = 10000
+    # On resume: >0 means "do not restore the replay buffer from the checkpoint,
+    # re-collect this many steps with the current policy instead" — the recovery
+    # path when the buffer's memmap files are lost or corrupt.
+    resume_prefill: int = 0
 
     # Environment
     env_state: str = "go"

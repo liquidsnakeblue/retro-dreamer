@@ -251,7 +251,11 @@ class MemmapArray(np.lib.mixins.NDArrayOperatorsMixin):
     def __setstate__(self, state):
         filename = state["_filename"]
         if state["_file"] is None:
-            tmpfile = _TemporaryFileWrapper(None, filename, delete=True)
+            # delete=False: __getstate__ strips ownership, so an unpickling process
+            # (eval, checkpoint inspection, resume) must NEVER schedule deletion of
+            # the underlying file — with delete=True, evaluating a checkpoint of a
+            # LIVE run deleted its replay-buffer memmaps on exit and crashed training.
+            tmpfile = _TemporaryFileWrapper(None, filename, delete=False)
             tmpfile.name = filename
             tmpfile._closer.name = filename
             state["_file"] = tmpfile

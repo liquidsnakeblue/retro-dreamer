@@ -50,6 +50,9 @@ def resume_from_checkpoint(cfg: DictConfig) -> DictConfig:
     old_cfg.algo.pop("total_steps", None)
     old_cfg.algo.pop("learning_starts", None)
     old_cfg.checkpoint.pop("resume_from", None)
+    # Whether to restore the replay buffer is a per-resume decision (e.g. the
+    # buffer files were lost) -- let the CLI override it instead of clobbering.
+    old_cfg.buffer.pop("checkpoint", None)
     # Substitute the config with the old one (except for the parameters removed before)
     # because the experiment must continue with the same parameters
     with open_dict(cfg):

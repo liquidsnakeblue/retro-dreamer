@@ -18,6 +18,7 @@ class TrainingStartRequest(BaseModel):
     fresh_start: bool = False
     game_id: Optional[str] = None
     initial_state: Optional[str] = None
+    resume_prefill: Optional[int] = None
 
 
 class CreateGameRequest(BaseModel):
@@ -65,6 +66,8 @@ async def start_training(req: TrainingStartRequest):
         config.replay_ratio = req.replay_ratio
     if req.num_envs is not None:
         config.num_envs = req.num_envs
+    if req.resume_prefill is not None:
+        config.resume_prefill = req.resume_prefill
 
     _trainer.start(config, fresh_start=req.fresh_start)
     return {

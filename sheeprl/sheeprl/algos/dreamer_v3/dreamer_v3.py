@@ -486,7 +486,7 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
         memmap_dir=os.path.join(log_dir, "memmap_buffer", f"rank_{fabric.global_rank}"),
         buffer_cls=SequentialReplayBuffer,
     )
-    if cfg.checkpoint.resume_from and cfg.buffer.checkpoint:
+    if cfg.checkpoint.resume_from and cfg.buffer.checkpoint and "rb" in state:
         if isinstance(state["rb"], list) and fabric.world_size == len(state["rb"]):
             rb = state["rb"][fabric.global_rank]
         elif isinstance(state["rb"], EnvIndependentReplayBuffer):

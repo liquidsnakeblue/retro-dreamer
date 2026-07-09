@@ -48,6 +48,22 @@ state is recorded here.
 - `server.py`: port configurable via `RETRO_DREAMER_PORT` (8080 collides with another
   local service on this box; verified E2E on 8091).
 
+5. **`sheeprl/utils/memmap.py` — unpickling scheduled deletion of live buffer files.**
+   `MemmapArray.__setstate__` wrapped the buffer's backing file in
+   `_TemporaryFileWrapper(delete=True)`, so ANY process that unpickled a checkpoint
+   (eval, inspection) deleted the replay-buffer memmaps on exit — which crashed a LIVE
+   training run writing to those same files (checkpoint chains carry absolute paths).
+   Fixed to `delete=False`; `__getstate__` already strips ownership. This was also the
+   source of the ubiquitous benign-looking `NoneType has no attribute 'close'` tempfile
+   spam. **Rule regardless: prefer eval against a buffer-stripped checkpoint copy.**
+
+6. **`sheeprl/cli.py` — resume clobbers `buffer.checkpoint` CLI override.**
+   `resume_from_checkpoint()` merges the old run's config over the CLI config except a
+   whitelist; added `buffer.checkpoint` to the whitelist so "resume without restoring
+   the buffer" (recovery path) is expressible. Paired with a `"rb" in state` guard in
+   `dreamer_v3.py` for buffer-stripped checkpoints, and `resume_prefill` in the studio
+   API (`buffer.checkpoint=false` + `algo.learning_starts=N` on resume).
+
 ## Known-not-patched (watchlist)
 
 - Other algos (p2e, dreamer_v1/v2, PPO, SAC…) still carry 0.29 assumptions — we only

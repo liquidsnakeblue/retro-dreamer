@@ -272,8 +272,15 @@ class DreamerV3Trainer:
             resume_ckpt = self._find_latest_checkpoint()
             if resume_ckpt:
                 cmd.append(f'checkpoint.resume_from="{resume_ckpt}"')
-                cmd.append("algo.learning_starts=0")
-                print(f"[Trainer] Resuming from: {resume_ckpt}")
+                if cfg.resume_prefill > 0:
+                    # Buffer lost/corrupt: skip restoring it and re-collect
+                    # experience with the current policy before training resumes.
+                    cmd.append("buffer.checkpoint=false")
+                    cmd.append(f"algo.learning_starts={cfg.resume_prefill}")
+                    print(f"[Trainer] Resuming from: {resume_ckpt} (fresh buffer, prefill={cfg.resume_prefill})")
+                else:
+                    cmd.append("algo.learning_starts=0")
+                    print(f"[Trainer] Resuming from: {resume_ckpt}")
 
         env = os.environ.copy()
         # Child stdout is a pipe → Python block-buffers it. During long-episode
