@@ -3,14 +3,18 @@ import Hls from 'hls.js'
 
 const LIVE_BASE = `http://${window.location.hostname}:8092`
 
-/** Live Play: drop the newest checkpoint into the game and watch it play —
- * real 60fps video (5x crisp upscale baked into the stream) with real
- * emulator sound, delivered as HLS so playback is smooth. */
+type Mode = 'idle' | 'recording' | 'replay' | 'starting-live' | 'live'
+
+/** Watch the newest checkpoint play. Primary flow: record an episode to a
+ * file (flawless, seekable playback), per Schuyler's bk2-style workflow.
+ * Live streaming (HLS) kept as a secondary option. */
 export function LivePlay() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
-  const [playing, setPlaying] = useState(false)
-  const [starting, setStarting] = useState(false)
+  const [mode, setMode] = useState<Mode>('idle')
+  const [percent, setPercent] = useState(0)
+  const [elapsed, setElapsed] = useState(0)
+  const [length, setLength] = useState('60')
   const [volume, setVolume] = useState(0.7)
   const [error, setError] = useState<string | null>(null)
 
@@ -18,7 +22,7 @@ export function LivePlay() {
     if (videoRef.current) videoRef.current.volume = volume
   }, [volume])
 
-  const teardown = () => {
+  const reset = () => {
     hlsRef.current?.destroy()
     hlsRef.current = null
     const v = videoRef.current
@@ -28,28 +32,62 @@ export function LivePlay() {
       v.load()
     }
     fetch(`${LIVE_BASE}/stop`).catch(() => {})
-    setPlaying(false)
+    setMode('idle')
   }
 
-  const start = async () => {
+  useEffect(() => () => reset(), [])
+
+  // ---------- Record & Watch (primary) ----------
+  const record = async () => {
+    setError(null)
+    setMode('recording')
+    setPercent(0)
+    setElapsed(0)
+    const ticker = setInterval(() => setElapsed((e) => e + 1), 1000)
+    try {
+      await fetch(`${LIVE_BASE}/record?seconds=${length}`)
+      const t0 = Date.now()
+      while (true) {
+        await new Promise((r) => setTimeout(r, 1000))
+        const s = await fetch(`${LIVE_BASE}/record_status`).then((r) => r.json()).catch(() => null)
+        if (s?.error) throw new Error(s.error)
+        if (s?.percent != null) setPercent(s.percent)
+        if (s?.done) break
+        if (Date.now() - t0 > 8 * 60000) throw new Error('timeout')
+      }
+      const v = videoRef.current!
+      v.src = `${LIVE_BASE}/rec/recording.mp4?t=${Date.now()}`
+      v.controls = true
+      v.loop = true
+      v.volume = volume
+      await v.play()
+      setMode('replay')
+    } catch (e) {
+      setError(`Recording failed: ${(e as Error).message}`)
+      setMode('idle')
+    } finally {
+      clearInterval(ticker)
+    }
+  }
+
+  // ---------- Live (secondary) ----------
+  const startLive = async () => {
     const v = videoRef.current
     if (!v) return
     setError(null)
-    setStarting(true)
+    setMode('starting-live')
+    setElapsed(0)
+    const ticker = setInterval(() => setElapsed((e) => e + 1), 1000)
     try {
       await fetch(`${LIVE_BASE}/start`)
-      // wait for the playlist (session start includes checkpoint loading)
       const t0 = Date.now()
       while (true) {
         const r = await fetch(`${LIVE_BASE}/status`).then((r) => r.json()).catch(() => null)
         if (r?.playlist_ready) break
-        if (!r?.running && Date.now() - t0 > 20000) throw new Error('session died')
         if (Date.now() - t0 > 150000) throw new Error('timeout')
         await new Promise((res) => setTimeout(res, 500))
       }
-      if (!Hls.isSupported()) throw new Error('HLS unsupported in this browser')
-      // ride ~6s behind the live edge with no rate-chasing: hugging the edge
-      // means any producer clock wobble starves the buffer (stutter ~20s in)
+      if (!Hls.isSupported()) throw new Error('HLS unsupported')
       const hls = new Hls({ liveSyncDurationCount: 6, maxLiveSyncPlaybackRate: 1.0 })
       hlsRef.current = hls
       hls.loadSource(`${LIVE_BASE}/live/live.m3u8`)
@@ -61,55 +99,79 @@ export function LivePlay() {
         })
         setTimeout(() => reject(new Error('manifest timeout')), 30000)
       })
+      v.controls = false
+      v.loop = false
       v.volume = volume
       await v.play()
-      setPlaying(true)
+      setMode('live')
     } catch (e) {
-      setError(`Stream failed to start (${(e as Error).message}) — is the live server on :8092?`)
-      teardown()
+      setError(`Live stream failed: ${(e as Error).message}`)
+      reset()
     } finally {
-      setStarting(false)
+      clearInterval(ticker)
     }
   }
 
-  useEffect(() => () => teardown(), [])
+  const busy = mode === 'recording' || mode === 'starting-live'
+  const showingVideo = mode === 'replay' || mode === 'live'
 
   return (
     <div className="absolute inset-0 flex flex-col bg-retro-card">
       <div className="px-4 py-3 border-b border-retro-border flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
-          <h2 className="text-sm font-semibold text-retro-text">Live Play</h2>
-          {playing && (
+          <h2 className="text-sm font-semibold text-retro-text">Watch</h2>
+          {mode === 'live' && (
             <span className="flex items-center gap-1.5 text-[10px] text-red-400 font-semibold">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-              LIVE — newest checkpoint, ~4s behind real time
+              LIVE — ~6s behind real time
+            </span>
+          )}
+          {mode === 'replay' && (
+            <span className="text-[10px] text-retro-success font-semibold">
+              RECORDED — newest checkpoint, loops
             </span>
           )}
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-retro-text-dim">🔊</span>
             <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={volume}
+              type="range" min={0} max={1} step={0.05} value={volume}
               onChange={(e) => setVolume(Number(e.target.value))}
               className="w-24 accent-retro-accent"
             />
           </div>
-          {!playing ? (
+          <select
+            value={length}
+            onChange={(e) => setLength(e.target.value)}
+            disabled={busy}
+            className="bg-retro-surface border border-retro-border rounded text-xs px-2 py-1.5 text-retro-text"
+          >
+            <option value="30">30 sec</option>
+            <option value="60">1 min</option>
+            <option value="120">2 min</option>
+            <option value="180">3 min</option>
+            <option value="full">Full episode</option>
+          </select>
+          {!showingVideo && !busy && (
+            <>
+              <button
+                onClick={record}
+                className="px-4 py-1.5 text-xs font-semibold rounded bg-retro-accent text-black hover:brightness-110"
+              >
+                🎥 Record & Watch
+              </button>
+              <button
+                onClick={startLive}
+                className="px-3 py-1.5 text-xs font-semibold rounded bg-retro-surface border border-retro-border text-retro-text hover:bg-retro-surface/60"
+              >
+                Live
+              </button>
+            </>
+          )}
+          {(showingVideo || busy) && (
             <button
-              onClick={start}
-              disabled={starting}
-              className="px-4 py-1.5 text-xs font-semibold rounded bg-retro-accent text-black hover:brightness-110 disabled:opacity-50"
-            >
-              {starting ? 'Starting…' : '▶ Play'}
-            </button>
-          ) : (
-            <button
-              onClick={teardown}
+              onClick={reset}
               className="px-4 py-1.5 text-xs font-semibold rounded bg-retro-surface border border-retro-border text-retro-text hover:bg-retro-surface/60"
             >
               ◼ Stop
@@ -119,23 +181,21 @@ export function LivePlay() {
       </div>
 
       <div className="flex-1 min-h-0 relative bg-black">
-        <video
-          ref={videoRef}
-          playsInline
-          className="absolute inset-0 w-full h-full object-contain"
-          onEnded={() => {
-            teardown()
-            setError('Session ended — press Play to start a new one')
-          }}
-        />
-        {!playing && (
+        <video ref={videoRef} playsInline className="absolute inset-0 w-full h-full object-contain" />
+        {!showingVideo && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-retro-text-dim text-xs bg-black/60">
             <p className="text-2xl mb-2 opacity-30">🎮</p>
-            {starting ? (
-              <p>Starting session — loading the newest checkpoint…</p>
-            ) : (
-              <p>Press Play to drop the newest trained AI into the game</p>
+            {mode === 'recording' && (
+              <div className="w-64">
+                <p className="mb-2">Recording the newest checkpoint… {percent}% ({elapsed}s)</p>
+                <div className="h-1.5 bg-retro-surface rounded-full overflow-hidden">
+                  <div className="h-full bg-retro-accent transition-all" style={{ width: `${percent}%` }} />
+                </div>
+                <p className="mt-2 opacity-60">model load ~30s, then generates ~1.2x realtime</p>
+              </div>
             )}
+            {mode === 'starting-live' && <p>Starting live session… {elapsed}s (cold start 60-90s)</p>}
+            {mode === 'idle' && <p>Record the newest trained AI playing, then watch it — or go Live</p>}
             {error && <p className="text-red-400 mt-2 max-w-md">{error}</p>}
           </div>
         )}

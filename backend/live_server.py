@@ -31,6 +31,8 @@ IDLE_KILL_SECONDS = 90
 _lock = threading.Lock()
 _session: subprocess.Popen | None = None
 _last_access = 0.0
+_recorder: subprocess.Popen | None = None
+REC_PATH = None  # set in main() after HLS_DIR exists
 
 
 def _stop_session_locked():
@@ -89,6 +91,34 @@ def _reaper():
                 _stop_session_locked()
 
 
+def _start_recorder_locked(seconds: str, initial_state: str | None):
+    global _recorder
+    if _recorder is not None and _recorder.poll() is None:
+        _recorder.terminate()
+        try:
+            _recorder.wait(timeout=5)
+        except Exception:
+            _recorder.kill()
+    rec = HLS_DIR / "recording.mp4"
+    prog = HLS_DIR / "recording.progress.json"
+    for f in (rec, prog, HLS_DIR / "recording.tmp.mp4"):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    env = os.environ.copy()
+    cmd = [PYTHON, str(SHEEPRL_DIR / "_retro_record.py"), "latest", seconds, str(rec)]
+    if initial_state:
+        cmd.append(initial_state)
+    _recorder = subprocess.Popen(
+        cmd,
+        cwd=str(SHEEPRL_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=open(HLS_DIR / "recorder.log", "wb"),
+        env=env,
+    )
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -111,8 +141,16 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/start":
             with _lock:
+                # reuse a live session: killing a healthy stream to cold-start
+                # another (~60-90s CPU checkpoint load) punishes an impatient
+                # second click; the idle reaper bounds staleness to ~90s anyway
+                running = _session is not None and _session.poll() is None
+                if running and (HLS_DIR / "live.m3u8").exists():
+                    _last_access = time.time()
+                    self._send(200, b'{"started": true, "reused": true}')
+                    return
                 _start_session_locked()
-            self._send(200, b'{"started": true}')
+            self._send(200, b'{"started": true, "reused": false}')
             return
 
         if path == "/stop":
@@ -135,6 +173,65 @@ class Handler(BaseHTTPRequestHandler):
                     % (str(running).lower(), str(ready and running).lower())
                 ).encode(),
             )
+            return
+
+        if path.startswith("/record"):
+            if path == "/record_status":
+                prog = HLS_DIR / "recording.progress.json"
+                alive = _recorder is not None and _recorder.poll() is None
+                if prog.exists():
+                    body = prog.read_bytes()
+                elif alive:
+                    body = b'{"frames": 0, "percent": 0, "done": false}'
+                else:
+                    body = b'{"done": false, "error": "no recorder running"}'
+                self._send(200, body)
+                return
+            # /record?seconds=60[&state=gp_knight_beginner]
+            from urllib.parse import parse_qs, urlparse
+
+            q = parse_qs(urlparse(self.path).query)
+            seconds = q.get("seconds", ["60"])[0]
+            if seconds != "full":
+                seconds = str(max(5, min(300, int(float(seconds)))))
+            initial_state = q.get("state", [None])[0]
+            with _lock:
+                _start_recorder_locked(seconds, initial_state)
+            self._send(200, b'{"recording": true}')
+            return
+
+        if path == "/rec/recording.mp4":
+            f = HLS_DIR / "recording.mp4"
+            if not f.is_file():
+                self._send(404, b"")
+                return
+            data = f.read_bytes()
+            rng = self.headers.get("Range")
+            if rng and rng.startswith("bytes="):
+                try:
+                    spec = rng.split("=", 1)[1].split("-")
+                    start = int(spec[0]) if spec[0] else 0
+                    end = int(spec[1]) if len(spec) > 1 and spec[1] else len(data) - 1
+                    end = min(end, len(data) - 1)
+                    chunk = data[start : end + 1]
+                    self.send_response(206)
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+                    self.send_header("Content-Length", str(len(chunk)))
+                    self.end_headers()
+                    self.wfile.write(chunk)
+                    return
+                except (ValueError, IndexError):
+                    pass
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
 
         if path.startswith("/live/"):
