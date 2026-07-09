@@ -353,25 +353,20 @@ class DreamerV3Trainer:
             print("[Trainer] Training completed normally.")
 
     def _find_latest_checkpoint(self) -> Optional[str]:
-        """Find the most recent SheepRL checkpoint for the current game."""
+        """Find the most recent SheepRL checkpoint for the current game.
+
+        Searches ALL run directories, newest checkpoint file wins: an aborted
+        launch leaves an empty run dir that must not shadow older checkpoints
+        (that failure mode silently degraded a resume into a fresh start).
+        """
         logs = _sheeprl_logs(self.config.game_id)
         if not logs.exists():
             return None
 
-        run_dirs = sorted(logs.glob("*/"), key=lambda p: p.stat().st_mtime)
-        if not run_dirs:
-            return None
-
-        latest_run = run_dirs[-1]
-        version_dirs = sorted(latest_run.glob("version_*/"), key=lambda p: p.name)
-        if not version_dirs:
-            return None
-
-        ckpt_dir = version_dirs[-1] / "checkpoint"
-        if not ckpt_dir.exists():
-            return None
-
-        ckpts = sorted(ckpt_dir.glob("ckpt_*.ckpt"), key=lambda p: p.stat().st_mtime)
+        ckpts = sorted(
+            logs.glob("*/version_*/checkpoint/ckpt_*.ckpt"),
+            key=lambda p: p.stat().st_mtime,
+        )
         if not ckpts:
             return None
 
