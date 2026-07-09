@@ -234,7 +234,10 @@ def make_env(
             env = gym.wrappers.RecordVideo(
                 env, os.path.join(run_name, prefix + "_videos" if prefix else "videos"),
                 episode_trigger=lambda ep: ep % video_freq == 0,
-                step_trigger=lambda step: step % video_step_freq == 0,
+                # step > 0: at step 0 this would interrupt the episode-trigger
+                # recording started one frame earlier at reset, orphaning a
+                # 1-frame (33ms) episode-0 stub video at every launch.
+                step_trigger=lambda step: step > 0 and step % video_step_freq == 0,
                 disable_logger=True,
             )
         return env
