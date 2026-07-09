@@ -132,6 +132,11 @@ class RetroDreamerWrapper(gym.Wrapper):
         self.episode_reward = 0.0
         self.prev_info: Dict[str, Any] = {}
 
+        # Optional raw A/V tap: called (frame_rgb, audio_int16) for EVERY
+        # emulator frame inside the frame_skip loop — full 60fps + sound for
+        # live streaming, independent of the 64x64 agent observation.
+        self.frame_callback = None
+
     def _process_observation(self, obs: np.ndarray) -> np.ndarray:
         obs = cv2.resize(obs, (self.screen_size, self.screen_size), interpolation=cv2.INTER_AREA)
         if self.grayscale:
@@ -168,6 +173,8 @@ class RetroDreamerWrapper(gym.Wrapper):
 
         for _ in range(self.frame_skip):
             obs, reward, done, trunc, info = self._env.step(multibinary_action)
+            if self.frame_callback is not None:
+                self.frame_callback(obs, self._env.em.get_audio())
             shaped_reward = self._calculate_reward(info, reward)
             total_reward += shaped_reward
             if done or trunc:

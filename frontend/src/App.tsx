@@ -6,8 +6,9 @@ import { TrainingControls } from './components/TrainingControls'
 import { LogTerminal } from './components/LogTerminal'
 import { GameSelector } from './components/GameSelector'
 import { GameConfigEditor } from './components/GameConfigEditor'
+import { LivePlay } from './components/LivePlay'
 
-type ActiveTab = 'metrics' | 'config'
+type ActiveTab = 'metrics' | 'live' | 'config'
 
 export default function App() {
   const [selectedGame, setSelectedGame] = useState('FZero-Snes')
@@ -61,6 +62,11 @@ export default function App() {
               onClick={() => setActiveTab('metrics')}
             />
             <TabButton
+              label="Live Play"
+              active={activeTab === 'live'}
+              onClick={() => setActiveTab('live')}
+            />
+            <TabButton
               label="Game Config"
               active={activeTab === 'config'}
               onClick={() => setActiveTab('config')}
@@ -95,6 +101,12 @@ export default function App() {
                 <div className="shrink-0">
                   <LogTerminal />
                 </div>
+              </div>
+            )}
+
+            {activeTab === 'live' && (
+              <div className="h-full relative">
+                <LivePlay />
               </div>
             )}
 
