@@ -1,12 +1,12 @@
-"""Live A/V player: the newest checkpoint plays the game, and a fragmented
-MP4 stream (h264 + aac — real 60fps video with real emulator sound) is
-written to STDOUT. The live sidecar serves that stream to the browser.
-
-Runs the agent on CPU; never touches the GPU or a training run.
+"""Live A/V player: the newest checkpoint plays the game, and an HLS live
+stream (h264 + aac — real 60fps video with real emulator sound, 5x
+nearest-neighbor upscaled) is written as segments to RETRO_LIVE_HLS_DIR.
+The live sidecar serves the segment files; the browser plays them with
+hls.js, which handles live buffering robustly (a raw progressive MP4
+download into <video> stutters unpredictably in Chrome).
 
 Usage:
-  python _retro_live_player.py [checkpoint|latest] [initial_state]
-Logs go to stderr; stdout is exclusively the MP4 byte stream.
+  RETRO_LIVE_HLS_DIR=/tmp/retro-dreamer-live python _retro_live_player.py [checkpoint|latest] [initial_state]
 """
 import os
 import subprocess
@@ -118,6 +118,15 @@ fps = 60
 # audio to interleave, so the writer never reaches the audio write.
 v_r, v_w = os.pipe()
 a_r, a_w = os.pipe()
+hls_dir = Path(os.environ.get("RETRO_LIVE_HLS_DIR", "/tmp/retro-dreamer-live"))
+hls_dir.mkdir(parents=True, exist_ok=True)
+# only stream files — glob("*") would unlink the sidecar's open player.log
+for old in hls_dir.glob("live*"):
+    try:
+        old.unlink()
+    except OSError:
+        pass
+
 ffmpeg = subprocess.Popen(
     [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -128,14 +137,16 @@ ffmpeg = subprocess.Popen(
         # baked into the stream itself.
         "-vf", f"scale={w * 5}:{h * 5}:flags=neighbor",
         "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-        "-pix_fmt", "yuv420p", "-g", str(fps * 2), "-crf", "21",
+        "-pix_fmt", "yuv420p", "-g", str(fps), "-crf", "21",
         "-c:a", "aac", "-b:a", "128k",
-        "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-        "-frag_duration", "250000",
-        "pipe:1",
+        "-f", "hls",
+        "-hls_time", "1",
+        "-hls_list_size", "10",
+        "-hls_flags", "delete_segments+independent_segments",
+        str(hls_dir / "live.m3u8"),
     ],
     stdin=subprocess.DEVNULL,
-    stdout=sys.stdout.buffer,
+    stdout=subprocess.DEVNULL,
     pass_fds=(v_r, a_r),
 )
 os.close(v_r)

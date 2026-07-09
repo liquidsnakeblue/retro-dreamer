@@ -16,7 +16,7 @@ export default function App() {
   const { connected, status, videos } = useTrainingPolling()
 
   return (
-    <div className="min-h-screen flex flex-col bg-retro-bg">
+    <div className="h-screen overflow-hidden flex flex-col bg-retro-bg">
       {/* Header */}
       <header className="bg-retro-surface border-b border-retro-border px-6 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
@@ -44,7 +44,10 @@ export default function App() {
       <StatusBar status={status} />
 
       {/* Main Content */}
-      <main className="flex-1 p-4 grid grid-cols-12 gap-4 overflow-hidden" style={{ height: 'calc(100vh - 100px)' }}>
+      <main
+        className="flex-1 min-h-0 p-4 grid grid-cols-12 gap-4 overflow-hidden"
+        style={{ gridTemplateRows: 'minmax(0, 1fr)' }}
+      >
         {/* Left column: Game selector + Controls + Episode Player */}
         <div className="col-span-3 flex flex-col gap-4 overflow-y-auto">
           <GameSelector selectedGame={selectedGame} onSelect={setSelectedGame} />
