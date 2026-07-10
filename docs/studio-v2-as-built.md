@@ -93,6 +93,12 @@ your audit.
     TERMINAL/idle noise events on the health monitor; the watchdog is killed+
     relaunched manually around server bounces (pkill self-match footgun: never
     `pkill -f` a pattern that appears in your own command line).
+    CONFIRMED IN THE WILD 2026-07-10: the user clicked the UI Stop button and
+    the watchdog auto-resumed training ~2min later — it cannot distinguish a
+    user-initiated stop from a crash. Real fix: /training/stop should record
+    stop intent (e.g. a stopped-by-user flag in status or a marker file) and
+    the watchdog must honor it; until then the watchdog is manually disarmed
+    whenever a human is driving the UI.
 
 ## Current live state (2026-07-10 ~11:00)
 
