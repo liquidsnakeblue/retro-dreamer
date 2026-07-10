@@ -1,0 +1,32 @@
+{
+  "info": {
+    "health": {
+      "address": 8257737,
+      "type": "<u2"
+    },
+    "pos": {
+      "address": 8261986,
+      "type": "|u2"
+    },
+    "race_on": {
+      "address": 80,
+      "type": "|u1"
+    },
+    "reverse": {
+      "address": 2817,
+      "type": "|u1"
+    },
+    "speed": {
+      "address": 2,
+      "type": "<u2"
+    },
+    "x": {
+      "address": 8260464,
+      "type": "<u2"
+    },
+    "y": {
+      "address": 8260496,
+      "type": "<u2"
+    }
+  }
+}

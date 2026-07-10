@@ -58,6 +58,13 @@ async def start_training(req: TrainingStartRequest):
 
     # Override game / state if provided
     if req.game_id is not None:
+        # Unknown game ids must fail HERE with a 404, not as a hydra stack
+        # trace from the child process two seconds later.
+        if _game_manager is not None:
+            try:
+                _game_manager.get_game(req.game_id)
+            except FileNotFoundError:
+                raise HTTPException(404, f"Unknown game '{req.game_id}'")
         config.game_id = req.game_id
     if req.initial_state is not None:
         config.initial_state = req.initial_state
@@ -108,6 +115,23 @@ async def start_training(req: TrainingStartRequest):
         "initial_state": config.initial_state,
         "fresh_start": req.fresh_start,
     }
+
+
+@router.post("/training/switch")
+async def switch_training(req: TrainingStartRequest):
+    """Atomic game/lineage switch: gracefully suspend whatever is training
+    (final loss-free checkpoint registered as its lineage head), then start
+    the requested game — resuming its own head if it has one, fresh brain if
+    it never trained."""
+    if _trainer is None:
+        raise HTTPException(500, "Trainer not initialized")
+    suspended = None
+    if _trainer.status.state == "training":
+        suspended = _trainer.stop(graceful=True, timeout=180.0)
+    result = await start_training(req)
+    result["status"] = "switched"
+    result["suspended_snapshot"] = suspended
+    return result
 
 
 @router.post("/training/stop")

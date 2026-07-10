@@ -1,5 +1,10 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useGameList } from '../hooks/useGameConfig'
+
+type Workspace = {
+  game_id: string
+  lineages: { name: string; status: string; running: boolean; head_step: number | null }[]
+}
 
 interface GameSelectorProps {
   selectedGame: string
@@ -9,8 +14,22 @@ interface GameSelectorProps {
 export function GameSelector({ selectedGame, onSelect }: GameSelectorProps) {
   const { games, loading } = useGameList()
   const [search, setSearch] = useState('')
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+
+  useEffect(() => {
+    const load = () =>
+      fetch('/api/workspaces')
+        .then((r) => r.json())
+        .then((d) => setWorkspaces(d.workspaces || []))
+        .catch(() => {})
+    load()
+    const t = setInterval(load, 15000)
+    return () => clearInterval(t)
+  }, [])
 
   const current = games.find((g: any) => (g.game_id || g.id) === selectedGame)
+  const ws = workspaces.find((w) => w.game_id === selectedGame)
+  const mainLineage = ws?.lineages.find((l) => l.status === 'active') ?? ws?.lineages[0]
 
   // Split into custom and built-in, filter by search
   const { customGames, builtinGames } = useMemo(() => {
@@ -84,6 +103,14 @@ export function GameSelector({ selectedGame, onSelect }: GameSelectorProps) {
                 <span className="text-retro-text-dim">built-in</span>
               ) : (
                 <span className="text-retro-success">custom</span>
+              )}
+              {' · '}
+              {mainLineage?.running ? (
+                <span className="text-retro-success">● training @ {mainLineage.head_step?.toLocaleString()}</span>
+              ) : mainLineage?.head_step ? (
+                <span className="text-retro-text">brain @ step {mainLineage.head_step.toLocaleString()}</span>
+              ) : (
+                <span className="text-retro-text-dim">never trained</span>
               )}
             </p>
           </div>

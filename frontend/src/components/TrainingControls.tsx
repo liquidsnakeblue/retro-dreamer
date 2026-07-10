@@ -41,8 +41,8 @@ export function TrainingControls({ status, selectedGame }: TrainingControlsProps
     }
   }
 
-  async function handleStart() {
-    await apiCall('/training/start', 'POST', {
+  async function handleStart(endpoint: '/training/start' | '/training/switch' = '/training/start') {
+    await apiCall(endpoint, 'POST', {
       model_size: modelSize,
       batch_size: batchSize,
       replay_ratio: parseFloat(replayRatio),
@@ -52,6 +52,10 @@ export function TrainingControls({ status, selectedGame }: TrainingControlsProps
       initial_state: initialState || undefined,
     })
   }
+
+  // Training a different game than selected → offer an atomic switch
+  // (graceful suspend of the running game, then start/resume this one)
+  const runningOtherGame = isRunning && status?.game_id && status.game_id !== selectedGame
 
   const stateOptions: { value: string; label: string }[] = [
     { value: '', label: 'Default' },
@@ -68,12 +72,29 @@ export function TrainingControls({ status, selectedGame }: TrainingControlsProps
         <div className="flex gap-2">
           {!isRunning ? (
             <button
-              onClick={handleStart}
+              onClick={() => handleStart('/training/start')}
               disabled={loading || !selectedGame}
               className="flex-1 bg-retro-success hover:bg-emerald-600 text-white px-3 py-2 rounded text-sm font-semibold transition-colors disabled:opacity-50"
             >
               {loading ? 'Starting...' : 'Start Training'}
             </button>
+          ) : runningOtherGame ? (
+            <>
+              <button
+                onClick={() => handleStart('/training/switch')}
+                disabled={loading}
+                className="flex-1 bg-retro-accent hover:brightness-110 text-black px-3 py-2 rounded text-sm font-semibold transition-colors disabled:opacity-50"
+                title={`Gracefully suspend ${status?.game_id}, then train ${selectedGame}`}
+              >
+                {loading ? 'Switching…' : `⇄ Switch to ${selectedGame}`}
+              </button>
+              <button
+                onClick={() => apiCall('/training/stop')}
+                className="bg-retro-danger hover:bg-red-600 text-white px-3 py-2 rounded text-sm font-semibold transition-colors"
+              >
+                Stop
+              </button>
+            </>
           ) : (
             <button
               onClick={() => apiCall('/training/stop')}

@@ -2,24 +2,12 @@ import { useRef, useState, useEffect } from 'react'
 import Hls from 'hls.js'
 
 const LIVE_BASE = `http://${window.location.hostname}:8092`
+const API = `http://${window.location.hostname}:8091/api`
 
-// Save states verified frame-by-frame 2026-07-09 (F-Zero specific for now;
-// generalize into games/<id> metadata when game #2 lands)
-const TRACKS = [
-  // Real races first — watching = GP mode (training stays practice-only)
-  { state: 'gp_knight_beginner', label: '🏁 GP Race 1 — Mute City I' },
-  { state: 'gp_knight_r2_bigblue', label: '🏁 GP Race 2 — Big Blue' },
-  { state: 'gp_knight_r3_sandocean', label: '🏁 GP Race 3 — Sand Ocean' },
-  { state: 'gp_knight_r4_deathwind', label: '🏁 GP Race 4 — Death Wind I' },
-  { state: 'gp_knight_r5_silence', label: '🏁 GP Race 5 — Silence' },
-  { state: 'go', label: 'Practice — Mute City I' },
-  { state: 'BBP1', label: 'Practice — Big Blue' },
-  { state: 'SOP1', label: 'Practice — Sand Ocean' },
-  { state: 'DWP1', label: 'Practice — Death Wind I' },
-  { state: 'SP1', label: 'Practice — Silence' },
-  { state: 'PLP1', label: 'Practice — Port Town I' },
-  { state: 'WLP1', label: 'Practice — White Land I' },
-]
+// Track list comes from games/<id>/metadata.json (annotated_states) — no
+// game-specific data lives in the frontend. Race states listed first.
+type Track = { state: string; label: string; group: string }
+const GROUP_ICON: Record<string, string> = { race: '🏁 ', practice: '', other: '' }
 
 type Mode = 'idle' | 'recording' | 'replay' | 'starting-live' | 'live'
 
@@ -33,13 +21,37 @@ export function LivePlay() {
   const [percent, setPercent] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [length, setLength] = useState('60')
-  const [track, setTrack] = useState('gp_knight_beginner')
+  const [tracks, setTracks] = useState<Track[]>([])
+  const [track, setTrack] = useState('')
   const [volume, setVolume] = useState(0.7)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.volume = volume
   }, [volume])
+
+  // Load the active game's annotated states (race states first)
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const cfg = await fetch(`${API}/config`).then((r) => r.json())
+        const game = await fetch(
+          `${API}/games/${encodeURIComponent(cfg.game_id || 'FZero-Snes')}`
+        ).then((r) => r.json())
+        const ann: Track[] = (game.annotated_states || []).map(
+          (s: { file: string; label: string; group?: string }) => ({
+            state: s.file, label: s.label, group: s.group || 'other',
+          })
+        )
+        const order = (g: string) => (g === 'race' ? 0 : g === 'practice' ? 1 : 2)
+        ann.sort((a, b) => order(a.group) - order(b.group))
+        setTracks(ann)
+        setTrack(game.default_watch_state || ann[0]?.state || '')
+      } catch {
+        setTracks([])
+      }
+    })()
+  }, [])
 
   const reset = () => {
     hlsRef.current?.destroy()
@@ -142,12 +154,12 @@ export function LivePlay() {
           {mode === 'live' && (
             <span className="flex items-center gap-1.5 text-[10px] text-red-400 font-semibold">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-              LIVE — {TRACKS.find((t) => t.state === track)?.label ?? track}, ~6s behind real time
+              LIVE — {tracks.find((t) => t.state === track)?.label ?? track}, ~6s behind real time
             </span>
           )}
           {mode === 'replay' && (
             <span className="text-[10px] text-retro-success font-semibold">
-              RECORDED — {TRACKS.find((t) => t.state === track)?.label ?? track}, newest checkpoint, loops
+              RECORDED — {tracks.find((t) => t.state === track)?.label ?? track}, newest checkpoint, loops
             </span>
           )}
         </div>
@@ -166,8 +178,8 @@ export function LivePlay() {
             disabled={busy}
             className="bg-retro-surface border border-retro-border rounded text-xs px-2 py-1.5 text-retro-text"
           >
-            {TRACKS.map((t) => (
-              <option key={t.state} value={t.state}>{t.label}</option>
+            {tracks.map((t) => (
+              <option key={t.state} value={t.state}>{(GROUP_ICON[t.group] ?? '') + t.label}</option>
             ))}
           </select>
           <select

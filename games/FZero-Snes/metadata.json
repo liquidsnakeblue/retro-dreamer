@@ -3,6 +3,85 @@
   "game_id": "FZero-Snes",
   "system": "Snes",
   "default_state": "go",
-  "button_layout": ["B", "Y", "Select", "Start", "Up", "Down", "Left", "Right", "A", "X", "L", "R"],
-  "rom_extensions": [".sfc", ".smc"]
+  "button_layout": [
+    "B",
+    "Y",
+    "Select",
+    "Start",
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "A",
+    "X",
+    "L",
+    "R"
+  ],
+  "rom_extensions": [
+    ".sfc",
+    ".smc"
+  ],
+  "default_watch_state": "gp_knight_beginner",
+  "states": [
+    {
+      "file": "gp_knight_beginner",
+      "label": "GP Race 1 \u2014 Mute City I",
+      "group": "race"
+    },
+    {
+      "file": "gp_knight_r2_bigblue",
+      "label": "GP Race 2 \u2014 Big Blue",
+      "group": "race"
+    },
+    {
+      "file": "gp_knight_r3_sandocean",
+      "label": "GP Race 3 \u2014 Sand Ocean",
+      "group": "race"
+    },
+    {
+      "file": "gp_knight_r4_deathwind",
+      "label": "GP Race 4 \u2014 Death Wind I",
+      "group": "race"
+    },
+    {
+      "file": "gp_knight_r5_silence",
+      "label": "GP Race 5 \u2014 Silence",
+      "group": "race"
+    },
+    {
+      "file": "go",
+      "label": "Practice \u2014 Mute City I",
+      "group": "practice"
+    },
+    {
+      "file": "BBP1",
+      "label": "Practice \u2014 Big Blue",
+      "group": "practice"
+    },
+    {
+      "file": "SOP1",
+      "label": "Practice \u2014 Sand Ocean",
+      "group": "practice"
+    },
+    {
+      "file": "DWP1",
+      "label": "Practice \u2014 Death Wind I",
+      "group": "practice"
+    },
+    {
+      "file": "SP1",
+      "label": "Practice \u2014 Silence",
+      "group": "practice"
+    },
+    {
+      "file": "PLP1",
+      "label": "Practice \u2014 Port Town I",
+      "group": "practice"
+    },
+    {
+      "file": "WLP1",
+      "label": "Practice \u2014 White Land I",
+      "group": "practice"
+    }
+  ]
 }

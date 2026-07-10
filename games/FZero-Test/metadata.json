@@ -1,0 +1,32 @@
+{
+  "display_name": "F-Zero (Test Workspace)",
+  "game_id": "FZero-Test",
+  "system": "Snes",
+  "default_state": "go",
+  "button_layout": [
+    "B",
+    "Y",
+    "Select",
+    "Start",
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "A",
+    "X",
+    "L",
+    "R"
+  ],
+  "rom_extensions": [
+    ".sfc",
+    ".smc"
+  ],
+  "default_watch_state": "go",
+  "states": [
+    {
+      "file": "go",
+      "label": "Practice \u2014 Mute City I",
+      "group": "practice"
+    }
+  ]
+}

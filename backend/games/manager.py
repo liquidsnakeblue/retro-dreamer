@@ -131,7 +131,22 @@ class GameManager:
             meta["game_id"] = meta.get("game_id") or game_id
             meta["source"] = "custom"
             meta["has_custom_config"] = True
-            meta["states"] = self.list_states(game_id)
+            # Annotated state list (label/group per save state) drives the
+            # Watch tab; unannotated files on disk are merged in so nothing
+            # is invisible. meta["states"] stays a plain filename list for
+            # backwards compatibility.
+            raw = meta.get("states")
+            annotated = (
+                raw if isinstance(raw, list) and raw and isinstance(raw[0], dict)
+                else []
+            )
+            files = self.list_states(game_id)
+            known = {s.get("file") for s in annotated}
+            meta["annotated_states"] = annotated + [
+                {"file": f, "label": f, "group": "other"}
+                for f in files if f not in known
+            ]
+            meta["states"] = files
             meta["config_files"] = [
                 fn for fn in VALID_CONFIG_FILENAMES
                 if (custom_dir / fn).exists()
