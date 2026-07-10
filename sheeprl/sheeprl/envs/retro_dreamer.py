@@ -241,6 +241,9 @@ class RetroDreamerWrapper(gym.Wrapper):
         self.episode_step += 1
         self.episode_reward += total_reward
         self.prev_info = info
+        # Surface which rotation track this episode runs on — reset() sets it,
+        # but episode-end consumers read the TERMINAL STEP's info, not reset's
+        info["track_state"] = getattr(self, "_current_track", self.initial_state)
 
         return {"rgb": processed_obs}, total_reward, terminated, truncated, info
 
@@ -256,6 +259,15 @@ class RetroDreamerWrapper(gym.Wrapper):
             if "penalty" in var_cfg and var_name in self.prev_info:
                 loss = max(0, self.prev_info[var_name] - info[var_name])
                 reward -= loss * var_cfg["penalty"]
+                # Optional smaller payment for REGAINING the variable (pit
+                # strips). MUST stay < penalty: then any deliberate
+                # damage->heal cycle is strictly net-negative (no farming),
+                # while a damaged agent finally gets paid at the moment of
+                # healing instead of only via distant survival value.
+                heal = var_cfg.get("heal_reward")
+                if heal:
+                    gained = max(0, info[var_name] - self.prev_info[var_name])
+                    reward += gained * heal
 
             # Direct reward on the variable's delta
             if "reward" in var_cfg and "op" not in var_cfg and "mode" not in var_cfg:

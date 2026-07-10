@@ -623,13 +623,15 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                     # dict of arrays, each leaf key paired with a `_key` presence mask
                     ep = final_info.get("episode", {})
                     ep_mask = np.asarray(ep.get("_r", np.zeros(cfg.env.num_envs, dtype=bool)))
+                    _tracks = final_info.get("track_state")
                     for i in np.flatnonzero(ep_mask):
                         ep_rew = float(ep["r"][i])
                         ep_len = float(ep["l"][i])
                         if aggregator and not aggregator.disabled:
                             aggregator.update("Rewards/rew_avg", ep_rew)
                             aggregator.update("Game/ep_len_avg", ep_len)
-                        fabric.print(f"Rank-0: policy_step={policy_step}, reward_env_{i}={ep_rew}")
+                        _tr = f" track={_tracks[i]}" if _tracks is not None else ""
+                        fabric.print(f"Rank-0: policy_step={policy_step}, reward_env_{i}={ep_rew}{_tr}")
                 else:
                     # gymnasium 0.29: object array of per-env info dicts
                     for i, agent_ep_info in enumerate(final_info):

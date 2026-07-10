@@ -9,7 +9,8 @@
         "max_delta": 300
       },
       "health": {
-        "penalty": 1.0
+        "penalty": 1.0,
+        "heal_reward": 0.25
       },
       "speed": {
         "mode": "quadratic",

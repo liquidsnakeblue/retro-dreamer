@@ -546,8 +546,9 @@ class _MetricsTracker:
 
             if "reward_env_" in line:
                 try:
+                    # "reward_env_0=56.7" optionally followed by " track=go"
                     reward_str = line.split("reward_env_")[1].split("=")[1].strip()
-                    reward_str = reward_str.strip("[]")
+                    reward_str = reward_str.split()[0].strip("[]")
                     reward = float(reward_str)
                     self.current_episode += 1
                     self._all_returns.append(reward)
