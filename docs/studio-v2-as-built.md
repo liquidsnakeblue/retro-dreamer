@@ -80,6 +80,12 @@ your audit.
 8. **RAM workbench has no UI** — tools only (ram_capture/ram_diff via curl or
    copilot). The record_episode tool ignores its game_id param (the recorder
    infers game from the checkpoint's run config).
+   ALSO: no "attach ROM to a built-in integration" flow — /games/import only
+   creates custom workspaces, and the games list doesn't show which of the
+   1006 built-ins are ROM-ready (user hit this 2026-07-10; worked around
+   with a bulk `python -m retro.import <dir>` — 207 NES games now ROM-ready).
+   Needed: ROM-ready badge in the list + per-game attach-ROM,
+   and /games/import should sanitize game_id (no validation today).
 9. **The suspend ack path is relative** (child cwd) — absolutized when the
    trainer registers it; anything else consuming the raw ack must handle that.
 10. **FZero-Test buffer** lives at training-state/games/FZero-Test/... (~debug
