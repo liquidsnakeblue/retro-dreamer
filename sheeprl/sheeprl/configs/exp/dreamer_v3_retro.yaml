@@ -46,7 +46,10 @@ algo:
   # encoder-only 48 override here would give L a mismatched encoder/decoder.
   actor:
     cls: sheeprl.algos.dreamer_v3.agent.Actor
-    ent_coef: 0.002
+    # Paper value (fixed across 150+ tasks). The old 0.002 (6.7x) was an
+    # early hand-tune, never A/B'd — audited out 2026-07-09 alongside the
+    # reverse-done trap it was compensating for.
+    ent_coef: 3e-4
   critic:
     cls: sheeprl.algos.dreamer_v3.agent.Critic
 

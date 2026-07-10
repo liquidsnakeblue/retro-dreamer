@@ -44,6 +44,11 @@ class RetroDreamerWrapper(gym.Wrapper):
         seed: Optional[int] = None,
         **kwargs,
     ):
+        if kwargs:
+            # Hydra passes only declared wrapper keys, so anything here is a
+            # typo or an unsupported option — surface it instead of silently
+            # composing a config that does nothing.
+            print(f"[RetroDreamerWrapper] WARNING: ignoring unknown kwargs: {sorted(kwargs)}")
         self.game_id = game_id
         self.game_dir = Path(game_dir)
         self.initial_state = initial_state.replace(".state", "")
@@ -167,20 +172,25 @@ class RetroDreamerWrapper(gym.Wrapper):
         action = max(0, min(action, len(self.action_mappings) - 1))
         multibinary_action = np.array(self.action_mappings[action], dtype=np.int8)
 
-        total_reward = 0.0
         terminated = False
         truncated = False
 
         for _ in range(self.frame_skip):
-            obs, reward, done, trunc, info = self._env.step(multibinary_action)
+            obs, _, done, trunc, info = self._env.step(multibinary_action)
             if self.frame_callback is not None:
                 self.frame_callback(obs, self._env.em.get_audio())
-            shaped_reward = self._calculate_reward(info, reward)
-            total_reward += shaped_reward
             if done or trunc:
                 terminated = done
                 truncated = trunc
                 break
+
+        # Reward is computed ONCE per agent step, from training.json only —
+        # the single source of truth. stable-retro's scenario.json reward is
+        # discarded: it used to be silently ADDED to this shaping, drowning
+        # training.json's coefficients ~1000:1. Per-subframe evaluation
+        # against a prev_info that only advances below would also overcount
+        # deltas (d+2d+3d+4d = 10d over a 4-frame skip instead of 4d).
+        total_reward = self._calculate_reward(info)
 
         processed_obs = self._process_observation(obs)
 
@@ -193,8 +203,8 @@ class RetroDreamerWrapper(gym.Wrapper):
 
         return {"rgb": processed_obs}, total_reward, terminated, truncated, info
 
-    def _calculate_reward(self, info: Dict[str, Any], base_reward: float) -> float:
-        reward = base_reward
+    def _calculate_reward(self, info: Dict[str, Any]) -> float:
+        reward = 0.0
         reward_config = self.training_config.get("reward", {}).get("variables", {})
 
         for var_name, var_cfg in reward_config.items():
@@ -206,10 +216,23 @@ class RetroDreamerWrapper(gym.Wrapper):
                 loss = max(0, self.prev_info[var_name] - info[var_name])
                 reward -= loss * var_cfg["penalty"]
 
-            # Direct reward with comparison operator
+            # Direct reward on the variable's delta
             if "reward" in var_cfg and "op" not in var_cfg and "mode" not in var_cfg:
                 if var_name in self.prev_info:
-                    gain = max(0, info[var_name] - self.prev_info[var_name])
+                    delta = info[var_name] - self.prev_info[var_name]
+                    # Fixed-width counters (e.g. F-Zero's u2 track position,
+                    # which sits near 65535 before the start line) wrap; take
+                    # the shortest modular distance so a wrap forward is a
+                    # small +, a wrap backward a small -. Without this, a
+                    # positive-only clip pays +wrap for driving backward
+                    # across the wrap point — a reward fountain.
+                    wrap = var_cfg.get("wrap")
+                    if wrap:
+                        delta = (delta + wrap // 2) % wrap - wrap // 2
+                    if var_cfg.get("delta") == "signed":
+                        gain = delta
+                    else:
+                        gain = max(0, delta)
                     reward += gain * var_cfg["reward"]
 
             # Binary mode (op-based)

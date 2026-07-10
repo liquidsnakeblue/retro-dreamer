@@ -14,18 +14,6 @@
     }
   },
   "reward": {
-    "variables": {
-      "health": {
-        "penalty": 1.0
-      },
-      "pos": {
-        "reward": 10.0
-      },
-      "speed": {
-        "op": "greater-than",
-        "reference": 1,
-        "reward": 0.10000000149011612
-      }
-    }
+    "variables": {}
   }
 }

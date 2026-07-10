@@ -513,14 +513,20 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
     learning_starts = cfg.algo.learning_starts // policy_steps_per_iter if not cfg.dry_run else 0
     prefill_steps = learning_starts - int(learning_starts > 0)
     if cfg.checkpoint.resume_from:
-        cfg.algo.per_rank_batch_size = state["batch_size"] // fabric.world_size
+        # Upstream restored batch size from checkpoint state here, silently
+        # discarding a batch change requested at resume — honor the config
+        # (batch size only affects replay sampling, not buffer layout).
         learning_starts += start_iter
         prefill_steps += start_iter
 
     # Create Ratio class
     ratio = Ratio(cfg.algo.replay_ratio, pretrain_steps=cfg.algo.per_rank_pretrain_steps)
     if cfg.checkpoint.resume_from:
+        # Keep the step counters (_prev) but honor the CONFIG's replay ratio:
+        # load_state_dict also restores the old run's _ratio, which silently
+        # discarded any ratio change requested at resume.
         ratio.load_state_dict(state["ratio"])
+        ratio._ratio = cfg.algo.replay_ratio
 
     # Warning for log and checkpoint every
     if cfg.metric.log_level > 0 and cfg.metric.log_every % policy_steps_per_iter != 0:

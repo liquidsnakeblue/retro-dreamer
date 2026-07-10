@@ -55,7 +55,11 @@ class TrainingConfig:
     # Training
     batch_size: int = 16
     batch_length: int = 64
-    replay_ratio: float = 4
+    # SheepRL units: gradient updates per policy step. Paper "train ratio"
+    # = this x batch_size x batch_length (x1024 at 16x64). 0.125 = paper 128,
+    # the Atari100k setting; the old default 4 was paper 4096 — 128x the
+    # paper's flagship game runs.
+    replay_ratio: float = 0.125
     train_ratio: int = 512  # legacy, unused
     learning_rate: float = 1e-4
     adam_eps: float = 1e-8
@@ -377,8 +381,8 @@ class TrainingConfig:
                     actor_units=768, critic_units=768,
                 ),
             ),
-            "large": dict(  # ~200M params
-                batch_size=32, batch_length=64, train_ratio=512, num_envs=4,
+            "large": dict(  # SheepRL L, ~77M params (paper batch is 16x64 for ALL sizes)
+                batch_size=16, batch_length=64, train_ratio=512, num_envs=6,
                 world_model=WorldModelConfig(
                     deter_size=4096, stoch_size=32, stoch_classes=32,
                     hidden_size=1024, cnn_depth=48, units=1024,
@@ -390,8 +394,8 @@ class TrainingConfig:
                     imag_horizon=15,
                 ),
             ),
-            "xl": dict(  # ~400M params — full DreamerV3 paper scale
-                batch_size=48, batch_length=64, train_ratio=512, num_envs=4,
+            "xl": dict(  # SheepRL XL, ~200M params — the paper's game config
+                batch_size=16, batch_length=64, train_ratio=512, num_envs=4,
                 world_model=WorldModelConfig(
                     deter_size=8192, stoch_size=32, stoch_classes=32,
                     hidden_size=1536, cnn_depth=96, units=1536,

@@ -12,7 +12,6 @@ router = APIRouter(prefix="/api")
 class TrainingStartRequest(BaseModel):
     model_size: str = "small"
     batch_size: Optional[int] = None
-    learning_rate: Optional[float] = None
     replay_ratio: Optional[float] = None
     num_envs: Optional[int] = None
     fresh_start: bool = False
@@ -42,10 +41,17 @@ def set_dependencies(trainer, game_manager):
 # Training endpoints
 # ------------------------------------------------------------------
 
+VALID_MODEL_SIZES = ("debug", "small", "medium", "large", "xl")
+
+
 @router.post("/training/start")
 async def start_training(req: TrainingStartRequest):
     if _trainer is None:
         raise HTTPException(500, "Trainer not initialized")
+    if req.model_size not in VALID_MODEL_SIZES:
+        # from_preset() and the launcher both silently fall back to small —
+        # reject bad names here instead of echoing them back as accepted
+        raise HTTPException(400, f"Unknown model_size {req.model_size!r}; valid: {list(VALID_MODEL_SIZES)}")
 
     from backend.training.config import TrainingConfig
     config = TrainingConfig.from_preset(req.model_size)
@@ -56,12 +62,24 @@ async def start_training(req: TrainingStartRequest):
     if req.initial_state is not None:
         config.initial_state = req.initial_state
         config.env_state = req.initial_state
+    elif _game_manager is not None:
+        # Fall back to the game's declared default_state (metadata.json was
+        # previously never consulted; the hardcoded "go" default only happens
+        # to be right for F-Zero)
+        try:
+            import json as _json
+            meta_path = _game_manager.games_dir / config.game_id / "metadata.json"
+            if meta_path.exists():
+                default_state = _json.loads(meta_path.read_text()).get("default_state")
+                if default_state:
+                    config.initial_state = default_state
+                    config.env_state = default_state
+        except Exception as exc:
+            print(f"[API] metadata default_state lookup failed: {exc}")
 
     # Override numeric hyperparams if provided
     if req.batch_size is not None:
         config.batch_size = req.batch_size
-    if req.learning_rate is not None:
-        config.learning_rate = req.learning_rate
     if req.replay_ratio is not None:
         config.replay_ratio = req.replay_ratio
     if req.num_envs is not None:

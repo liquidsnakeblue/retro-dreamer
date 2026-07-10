@@ -10,10 +10,12 @@ interface TrainingControlsProps {
 const API = '/api'
 
 export function TrainingControls({ status, selectedGame }: TrainingControlsProps) {
-  const [modelSize, setModelSize] = useState('small')
+  const [modelSize, setModelSize] = useState('large')
   const [batchSize, setBatchSize] = useState(16)
-  const [replayRatio, setReplayRatio] = useState(4)
-  const [numEnvs, setNumEnvs] = useState(8)
+  // SheepRL units: gradient updates per policy step. Paper "train ratio"
+  // = this x1024 (batch 16 x seq 64 replayed frames per update).
+  const [replayRatio, setReplayRatio] = useState('0.125')
+  const [numEnvs, setNumEnvs] = useState(6)
   const [freshStart, setFreshStart] = useState(false)
   const [initialState, setInitialState] = useState('')
   const [loading, setLoading] = useState(false)
@@ -43,7 +45,7 @@ export function TrainingControls({ status, selectedGame }: TrainingControlsProps
     await apiCall('/training/start', 'POST', {
       model_size: modelSize,
       batch_size: batchSize,
-      replay_ratio: replayRatio,
+      replay_ratio: parseFloat(replayRatio),
       num_envs: numEnvs,
       fresh_start: freshStart,
       game_id: selectedGame,
@@ -115,13 +117,18 @@ export function TrainingControls({ status, selectedGame }: TrainingControlsProps
             disabled={isRunning}
           />
 
-          <ControlSlider
-            label="Replay Ratio"
+          <ControlSelect
+            label="Replay Ratio (grad updates / step)"
             value={replayRatio}
             onChange={setReplayRatio}
-            min={1}
-            max={64}
-            step={1}
+            options={[
+              { value: '0.03125', label: '0.03 — paper 32 (Atari/Minecraft runs)' },
+              { value: '0.0625', label: '0.06 — paper 64 (ProcGen)' },
+              { value: '0.125', label: '0.125 — paper 128 (Atari100k)' },
+              { value: '0.25', label: '0.25 — paper 256' },
+              { value: '0.5', label: '0.5 — paper 512 (control suites)' },
+              { value: '1', label: '1.0 — paper 1024 (max sample-efficiency)' },
+            ]}
             disabled={isRunning}
           />
 

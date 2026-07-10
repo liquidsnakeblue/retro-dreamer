@@ -60,6 +60,23 @@ def resume_from_checkpoint(cfg: DictConfig) -> DictConfig:
     # a practice-mode brain on a Grand Prix state, save-state curricula).
     if "wrapper" in old_cfg.get("env", {}):
         old_cfg.env.wrapper.pop("initial_state", None)
+    # Operational knobs the launcher stamps on EVERY start — honor the new
+    # composition instead of silently reverting to the old run's values
+    # (audit 2026-07-09: replay_ratio/batch/entropy/cadence changes at resume
+    # were discarded by this merge). env.num_envs is deliberately NOT
+    # whitelisted: a restored replay buffer is shaped per-env, so changing
+    # env count requires a fresh run. NOTE: replay_ratio and batch size are
+    # ALSO restored from checkpoint state inside dreamer_v3.py — patched
+    # there too; this pop alone is not sufficient.
+    old_cfg.algo.pop("replay_ratio", None)
+    old_cfg.algo.pop("per_rank_batch_size", None)
+    old_cfg.algo.pop("per_rank_sequence_length", None)
+    if "actor" in old_cfg.get("algo", {}):
+        old_cfg.algo.actor.pop("ent_coef", None)
+    old_cfg.checkpoint.pop("every", None)
+    if "metric" in old_cfg:
+        old_cfg.metric.pop("log_every", None)
+    old_cfg.env.pop("video_freq", None)
     # Substitute the config with the old one (except for the parameters removed before)
     # because the experiment must continue with the same parameters
     with open_dict(cfg):
