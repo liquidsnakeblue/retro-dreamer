@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const API = '/api/copilot'
 
-type Ev = { seq: number; ts: number; kind: 'user' | 'assistant' | 'tool' | 'meta' | 'raw'; text: string }
+type Ev = {
+  seq: number
+  ts: number
+  kind: 'user' | 'assistant' | 'tool' | 'meta' | 'raw'
+  text: string
+  detail?: string // newer backend: full tool input (e.g. complete bash command)
+}
 
 /** Chat panel over the resident copilot — a headless claude-local session
  * (Qwen 3.6 27B on the 2x3090 box) driving the studio's HTTP tools.
@@ -60,14 +68,6 @@ export function CopilotPanel() {
     })
   }
 
-  const kindStyle: Record<Ev['kind'], string> = {
-    user: 'text-retro-text bg-retro-surface border-l-2 border-retro-accent',
-    assistant: 'text-retro-text bg-retro-card',
-    tool: 'text-retro-text-dim font-mono text-[10px]',
-    meta: 'text-retro-text-dim italic text-[10px]',
-    raw: 'text-retro-text-dim font-mono text-[10px]',
-  }
-
   return (
     <div className="absolute inset-0 flex flex-col bg-retro-card">
       <div className="px-4 py-3 border-b border-retro-border flex items-center justify-between shrink-0">
@@ -100,11 +100,7 @@ export function CopilotPanel() {
             <br />It drives the same studio tools you see in the UI. Thinking can take minutes — it's a reasoning model.
           </p>
         )}
-        {events.map((e) => (
-          <div key={e.seq} className={`px-3 py-2 rounded text-xs whitespace-pre-wrap ${kindStyle[e.kind]}`}>
-            {e.kind === 'tool' ? `⚙ ${e.text}` : e.text}
-          </div>
-        ))}
+        {events.map((e) => <EventRow key={e.seq} e={e} />)}
         <div ref={bottomRef} />
       </div>
 
@@ -130,4 +126,68 @@ export function CopilotPanel() {
       </div>
     </div>
   )
+}
+
+function EventRow({ e }: { e: Ev }) {
+  if (e.kind === 'assistant') {
+    return (
+      <div className="px-3 py-2 rounded text-xs bg-retro-surface/60 border border-retro-border/50 copilot-md">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{e.text}</ReactMarkdown>
+      </div>
+    )
+  }
+  if (e.kind === 'tool') return <ToolRow e={e} />
+  const style: Record<string, string> = {
+    user: 'text-retro-text bg-retro-surface border-l-2 border-retro-accent whitespace-pre-wrap',
+    meta: 'text-retro-text-dim italic text-[10px]',
+    raw: 'text-retro-text-dim font-mono text-[10px] whitespace-pre-wrap',
+  }
+  return <div className={`px-3 py-2 rounded text-xs ${style[e.kind]}`}>{e.text}</div>
+}
+
+/** One-line tool call, expandable when we have (or can recover) the full input.
+ * Handles both event formats: the newer backend sends {text: "Bash — desc",
+ * detail: "<full command>"}; the older one sent "Bash {json truncated @200}". */
+function ToolRow({ e }: { e: Ev }) {
+  const { summary, detail } = parseToolEvent(e)
+  if (!detail) {
+    return <div className="px-3 py-1.5 rounded text-[10px] font-mono text-retro-text-dim">⚙ {summary}</div>
+  }
+  return (
+    <details className="px-3 py-1.5 rounded text-[10px] text-retro-text-dim group">
+      <summary className="cursor-pointer font-mono list-none select-none hover:text-retro-text">
+        <span className="inline-block w-3 transition-transform group-open:rotate-90">▸</span>
+        ⚙ {summary}
+      </summary>
+      <pre className="mt-1.5 ml-4 p-2 rounded bg-retro-surface font-mono text-[10px] whitespace-pre-wrap break-all overflow-x-auto max-h-48 overflow-y-auto">
+        {detail}
+      </pre>
+    </details>
+  )
+}
+
+function parseToolEvent(e: Ev): { summary: string; detail?: string } {
+  if (e.detail !== undefined) return { summary: e.text, detail: e.detail || undefined }
+
+  // Legacy format: "Name {json possibly cut off at 200 chars}"
+  const sp = e.text.indexOf(' ')
+  if (sp === -1) return { summary: e.text }
+  const name = e.text.slice(0, sp)
+  const rest = e.text.slice(sp + 1)
+  try {
+    const inp = JSON.parse(rest)
+    const label =
+      inp.description || inp.file_path || inp.pattern ||
+      (typeof inp.command === 'string' ? inp.command.split('\n')[0].slice(0, 90) : '') ||
+      JSON.stringify(inp).slice(0, 90)
+    const detail = typeof inp.command === 'string' && inp.command.length > label.length
+      ? inp.command
+      : JSON.stringify(inp, null, 2)
+    return { summary: `${name} — ${label}`, detail: detail !== label ? detail : undefined }
+  } catch {
+    // Truncated JSON — fish out the most descriptive field we can
+    const m = rest.match(/"(?:description|command|file_path|pattern)"\s*:\s*"((?:[^"\\]|\\.)*)/)
+    const label = (m ? m[1] : rest).split('\\n')[0].slice(0, 90)
+    return { summary: `${name} — ${label}`, detail: rest.length > label.length + 30 ? rest : undefined }
+  }
 }

@@ -37,11 +37,14 @@ _events: list = []  # [{seq, ts, kind, text, raw?}]
 _seq = 0
 
 
-def _emit(kind: str, text: str, raw: dict = None):
+def _emit(kind: str, text: str, detail: str = None):
     global _seq
     with _lock:
         _seq += 1
-        _events.append({"seq": _seq, "ts": time.time(), "kind": kind, "text": text})
+        ev = {"seq": _seq, "ts": time.time(), "kind": kind, "text": text}
+        if detail:
+            ev["detail"] = detail
+        _events.append(ev)
         del _events[:-500]
 
 
@@ -85,8 +88,19 @@ def _reader(proc: subprocess.Popen):
                     _emit("assistant", block["text"])
                 elif block.get("type") == "tool_use":
                     name = block.get("name", "?")
-                    inp = json.dumps(block.get("input", {}))[:200]
-                    _emit("tool", f"{name} {inp}")
+                    inp = block.get("input") or {}
+                    # One readable line up front; full input as expandable detail
+                    if name == "Bash":
+                        label = inp.get("description") or inp.get("command", "").split("\n")[0][:120]
+                        detail = inp.get("command", "")
+                    elif "file_path" in inp:
+                        label = inp["file_path"]
+                        detail = "" if name == "Read" else json.dumps(inp, indent=2)[:4000]
+                    else:
+                        blob = json.dumps(inp)
+                        label = blob[:120]
+                        detail = json.dumps(inp, indent=2)[:4000] if len(blob) > 120 else ""
+                    _emit("tool", f"{name} — {label}", detail=detail)
         elif t == "result":
             _emit("meta", f"turn done ({ev.get('num_turns', '?')} turns, "
                           f"{ev.get('duration_ms', 0) / 1000:.0f}s)")

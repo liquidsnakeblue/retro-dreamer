@@ -2,6 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  /* Markdown rendered inside copilot chat bubbles */
+  .copilot-md > :first-child { @apply mt-0; }
+  .copilot-md > :last-child { @apply mb-0; }
+  .copilot-md p { @apply my-1.5 leading-relaxed; }
+  .copilot-md ul { @apply my-1.5 list-disc pl-5 space-y-0.5; }
+  .copilot-md ol { @apply my-1.5 list-decimal pl-5 space-y-0.5; }
+  .copilot-md h1, .copilot-md h2 { @apply text-sm font-semibold text-retro-text mt-3 mb-1; }
+  .copilot-md h3, .copilot-md h4 { @apply text-xs font-semibold text-retro-text mt-2.5 mb-1; }
+  .copilot-md table { @apply my-2 border-collapse text-[11px] block max-w-full overflow-x-auto; }
+  .copilot-md th { @apply border border-retro-border bg-retro-card px-2 py-1 text-left font-semibold whitespace-nowrap; }
+  .copilot-md td { @apply border border-retro-border px-2 py-1 tabular-nums; }
+  .copilot-md :not(pre) > code { @apply bg-retro-card border border-retro-border/60 rounded px-1 py-px font-mono text-[11px]; }
+  .copilot-md pre { @apply my-2 bg-retro-card border border-retro-border/60 rounded p-2 overflow-x-auto font-mono text-[11px] leading-relaxed; }
+  .copilot-md pre code { @apply bg-transparent border-0 p-0; }
+  .copilot-md a { @apply text-retro-accent underline; }
+  .copilot-md blockquote { @apply my-1.5 border-l-2 border-retro-border pl-2 text-retro-text-dim; }
+  .copilot-md strong { @apply font-semibold text-retro-text; }
+  .copilot-md hr { @apply my-2 border-retro-border; }
+}
+
 @layer base {
   ::-webkit-scrollbar {
     width: 6px;
