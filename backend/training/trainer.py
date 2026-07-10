@@ -298,6 +298,10 @@ class DreamerV3Trainer:
         env["CUDA_VISIBLE_DEVICES"] = "0"
         env["PYOPENGL_PLATFORM"] = "egl"
         env["PYGLET_HEADLESS"] = "1"
+        # XL runs at 31.1/32.6GB VRAM — allocator fragmentation over multi-hour
+        # runs is the known OOM risk at that headroom; expandable segments
+        # remove the fragmentation failure mode.
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
         print(
             f"[Trainer] Launching SheepRL "
