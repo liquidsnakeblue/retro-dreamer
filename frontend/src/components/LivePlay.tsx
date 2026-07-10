@@ -9,6 +9,9 @@ const TRACKS = [
   // Real races first — watching = GP mode (training stays practice-only)
   { state: 'gp_knight_beginner', label: '🏁 GP Race 1 — Mute City I' },
   { state: 'gp_knight_r2_bigblue', label: '🏁 GP Race 2 — Big Blue' },
+  { state: 'gp_knight_r3_sandocean', label: '🏁 GP Race 3 — Sand Ocean' },
+  { state: 'gp_knight_r4_deathwind', label: '🏁 GP Race 4 — Death Wind I' },
+  { state: 'gp_knight_r5_silence', label: '🏁 GP Race 5 — Silence' },
   { state: 'go', label: 'Practice — Mute City I' },
   { state: 'BBP1', label: 'Practice — Big Blue' },
   { state: 'SOP1', label: 'Practice — Sand Ocean' },
