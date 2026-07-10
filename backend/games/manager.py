@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -14,28 +15,51 @@ VALID_CONFIG_FILENAMES = {
     "metadata.json",
 }
 
-# System string extracted from game_id suffix (e.g. "SonicTheHedgehog-Genesis" -> "Genesis")
+# TRUE emulator button order per core (stable_retro/cores/*.json) — action
+# arrays index into these positions, so order and length must match exactly.
+# "" marks an unused slot (the core's None placeholder); arrays still include it.
 _SYSTEM_BUTTONS = {
     "Snes": ["B", "Y", "Select", "Start", "Up", "Down", "Left", "Right", "A", "X", "L", "R"],
     "Genesis": ["B", "A", "Mode", "Start", "Up", "Down", "Left", "Right", "C", "Y", "X", "Z"],
-    "Nes": ["B", "A", "Select", "Start", "Up", "Down", "Left", "Right"],
-    "Gba": ["B", "A", "Select", "Start", "Up", "Down", "Left", "Right", "L", "R"],
-    "GameBoy": ["B", "A", "Select", "Start", "Up", "Down", "Left", "Right"],
-    "GbColor": ["B", "A", "Select", "Start", "Up", "Down", "Left", "Right"],
-    "GbAdvance": ["B", "A", "Select", "Start", "Up", "Down", "Left", "Right", "L", "R"],
-    "Atari2600": ["Fire", "Up", "Down", "Left", "Right"],
-    "Sms": ["1", "2", "Up", "Down", "Left", "Right"],
-    "PCEngine": ["I", "II", "Select", "Run", "Up", "Down", "Left", "Right"],
+    "Nes": ["B", "", "Select", "Start", "Up", "Down", "Left", "Right", "A"],
+    "GameBoy": ["B", "", "Select", "Start", "Up", "Down", "Left", "Right", "A"],
+    "GbColor": ["B", "", "Select", "Start", "Up", "Down", "Left", "Right", "A"],
+    "GbAdvance": ["B", "", "Select", "Start", "Up", "Down", "Left", "Right", "A", "", "L", "R"],
+    "Gba": ["B", "", "Select", "Start", "Up", "Down", "Left", "Right", "A", "", "L", "R"],
+    "Atari2600": ["Button", "", "Select", "Reset", "Up", "Down", "Left", "Right"],
+    "Sms": ["B", "", "", "Pause", "Up", "Down", "Left", "Right", "A"],
+    "GameGear": ["B", "", "", "Start", "Up", "Down", "Left", "Right", "A"],
+    "PCEngine": ["II", "III", "Select", "Run", "Up", "Down", "Left", "Right", "I", "IV", "V", "VI"],
     "32x": ["B", "A", "Mode", "Start", "Up", "Down", "Left", "Right", "C", "Y", "X", "Z"],
-    "Saturn": ["B", "A", "Start", "Up", "Down", "Left", "Right", "C", "Y", "X", "Z", "L", "R"],
+    "Scd": ["B", "A", "Mode", "Start", "Up", "Down", "Left", "Right", "C", "Y", "X", "Z"],
+    "Saturn": ["B", "A", "Mode", "Start", "Up", "Down", "Left", "Right", "C", "Y", "X", "Z"],
 }
 
 
+def _base_game_id(game_id: str) -> str:
+    """Strip the integration version suffix built-in ids carry: '1942-Nes-v0' -> '1942-Nes'."""
+    return re.sub(r"-v\d+$", "", game_id)
+
+
 def _system_from_game_id(game_id: str) -> str:
-    """Extract system from game_id like 'SonicTheHedgehog-Genesis' -> 'Genesis'."""
-    if "-" in game_id:
-        return game_id.rsplit("-", 1)[-1]
+    """Extract system: 'SonicTheHedgehog-Genesis' -> 'Genesis', '1942-Nes-v0' -> 'Nes'."""
+    base = _base_game_id(game_id)
+    if "-" in base:
+        return base.rsplit("-", 1)[-1]
     return ""
+
+
+def _display_name(game_id: str) -> str:
+    """'SonicTheHedgehog-Genesis' -> 'Sonic The Hedgehog (Genesis)'."""
+    base = _base_game_id(game_id)
+    name_part = base.rsplit("-", 1)[0] if "-" in base else base
+    display = ""
+    for i, ch in enumerate(name_part):
+        if ch.isupper() and i > 0 and name_part[i - 1].islower():
+            display += " "
+        display += ch
+    system = _system_from_game_id(game_id)
+    return f"{display} ({system})" if system else display
 
 
 def _buttons_for_system(system: str) -> list[str]:
@@ -101,16 +125,7 @@ class GameManager:
                 if game_id in seen:
                     continue
                 system = _system_from_game_id(game_id)
-                # Make display name readable: "SonicTheHedgehog-Genesis" -> "Sonic The Hedgehog (Genesis)"
-                name_part = game_id.rsplit("-", 1)[0] if "-" in game_id else game_id
-                # Insert spaces before capitals
-                display = ""
-                for i, ch in enumerate(name_part):
-                    if ch.isupper() and i > 0 and name_part[i - 1].islower():
-                        display += " "
-                    display += ch
-                if system:
-                    display += f" ({system})"
+                display = _display_name(game_id)
 
                 # ROM presence: stable-retro ships integrations WITHOUT roms;
                 # only hash-matched imports (python -m retro.import) fill them
@@ -171,14 +186,7 @@ class GameManager:
             builtin_games = retro.data.list_games(retro.data.Integrations.STABLE)
             if game_id in builtin_games:
                 system = _system_from_game_id(game_id)
-                name_part = game_id.rsplit("-", 1)[0] if "-" in game_id else game_id
-                display = ""
-                for i, ch in enumerate(name_part):
-                    if ch.isupper() and i > 0 and name_part[i - 1].islower():
-                        display += " "
-                    display += ch
-                if system:
-                    display += f" ({system})"
+                display = _display_name(game_id)
 
                 states = retro.data.list_states(game_id, retro.data.Integrations.STABLE)
                 # Read built-in data.json to show variables
@@ -379,6 +387,79 @@ class GameManager:
 
         print(f"[GameManager] Created game scaffold at {game_dir}")
         return game_dir
+
+    def promote_game(self, game_id: str) -> dict:
+        """Promote a ROM-ready built-in integration into a custom workspace.
+
+        Copies the stock integration (RAM map, scenario, save states) plus the
+        imported ROM into games/<id>/, then adds our scaffold files. After this
+        the game is a first-class workspace: training.json rewards, reward_probe,
+        state building, training — the same pipeline as any custom game."""
+        import shutil
+
+        game_dir = self.games_dir / game_id
+        if game_dir.exists():
+            raise FileExistsError(f"Workspace already exists: {game_dir}")
+
+        retro = self._get_retro()
+        try:
+            rom_path = Path(retro.data.get_romfile_path(game_id))
+        except Exception as exc:
+            raise ValueError(
+                f"{game_id} has no ROM installed in the built-in integration. "
+                f"Import one first (python -m retro.import <folder>). ({exc})"
+            )
+        src = rom_path.parent
+
+        system = _system_from_game_id(game_id)
+        buttons = _buttons_for_system(system)
+
+        game_dir.mkdir(parents=True)
+        states_dir = game_dir / "states"
+        states_dir.mkdir()
+
+        copied, states = [], []
+        for f in sorted(src.iterdir()):
+            if f.suffix == ".state":
+                shutil.copy2(f, states_dir / f.name)
+                states.append(f.stem)
+            elif f.name.startswith("rom.") or f.name in ("data.json", "scenario.json"):
+                shutil.copy2(f, game_dir / f.name)
+                copied.append(f.name)
+            # skip script.lua / stock metadata.json — retro-specific, not ours
+
+        metadata = {
+            "display_name": _display_name(game_id),
+            "game_id": game_id,
+            "system": system,
+            "default_state": states[0] if states else "start",
+            "button_layout": buttons,
+            "promoted_from": str(src),
+        }
+        (game_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        (game_dir / "training.json").write_text(json.dumps({
+            "reward": {"variables": {}}, "done": {"variables": {}}
+        }, indent=2) + "\n")
+        (game_dir / "actions.json").write_text(json.dumps({
+            "actions": [{"name": "NoOp", "buttons": [0] * len(buttons)}]
+        }, indent=2) + "\n")
+
+        ram_vars = []
+        data_path = game_dir / "data.json"
+        if data_path.exists():
+            try:
+                ram_vars = sorted(json.loads(data_path.read_text()).get("info", {}).keys())
+            except Exception:
+                pass
+
+        print(f"[GameManager] Promoted built-in '{game_id}' to workspace {game_dir}")
+        return {
+            "game_dir": str(game_dir),
+            "system": system,
+            "copied": copied,
+            "states": states,
+            "ram_variables": ram_vars,
+        }
 
     # ------------------------------------------------------------------
     # Retro integration

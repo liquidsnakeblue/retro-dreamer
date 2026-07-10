@@ -390,6 +390,22 @@ async def put_game_config(game_id: str, filename: str, data: dict):
         raise HTTPException(400, str(exc))
 
 
+@router.post("/games/promote")
+async def promote_game(game_id: str):
+    """Promote a ROM-ready built-in game into a full custom workspace: copies
+    the stock integration (RAM map, scenario, states) + imported ROM into
+    games/<id>/ so the standard reward/probe/train pipeline applies."""
+    if _game_manager is None:
+        raise HTTPException(500, "GameManager not initialized")
+    try:
+        return {"status": "promoted", "game_id": game_id,
+                **_game_manager.promote_game(game_id)}
+    except FileExistsError as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @router.post("/games/import")
 async def import_game(
     game_id: str,

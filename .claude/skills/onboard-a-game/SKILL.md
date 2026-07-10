@@ -11,6 +11,12 @@ prompt); long jobs: poll /api/tools/jobs/<id>.
 
 ## Checklist (in order)
 
+0. **Built-in shortcut**: GET /api/games — if the game is source=builtin with
+   rom_ready=true, POST "/api/games/promote?game_id=<id>" first. That copies
+   the stock integration (pre-mapped RAM variables, scenario, save states) +
+   ROM into a workspace — steps 3-4 may already be half done; verify instead
+   of re-discovering. If builtin but rom_ready=false, stop and ask the human
+   for the ROM (bulk: python -m retro.import <folder>).
 1. **Confirm the workspace**: GET /api/workspaces + GET /api/games/{id} —
    ROM present, configs scaffolded, button layout matches the console.
 2. **Actions first**: edit actions.json to 4-8 USEFUL combos (movement +

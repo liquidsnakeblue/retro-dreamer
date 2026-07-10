@@ -1,0 +1,10 @@
+{
+  "done": {
+    "variables": {
+      "lives": {
+        "op": "equal",
+        "reference": 0
+      }
+    }
+  }
+}

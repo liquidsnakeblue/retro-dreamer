@@ -135,6 +135,20 @@ class RetroDreamerWrapper(gym.Wrapper):
                 row = [0] * n_buttons
                 row[i] = 1
                 self.action_mappings.append(row)
+        else:
+            # Normalize actions.json rows against the REAL button count: pad
+            # short rows with zeros (silently correct), reject long rows (a
+            # long row would press the wrong buttons — never train on that).
+            n_buttons = self._env.action_space.shape[0]
+            for idx, row in enumerate(self.action_mappings):
+                if len(row) > n_buttons:
+                    raise ValueError(
+                        f"actions.json action {idx} has {len(row)} buttons but "
+                        f"{game_id} exposes {n_buttons} ({self._env.buttons}) — "
+                        f"fix actions.json against the true layout"
+                    )
+                if len(row) < n_buttons:
+                    self.action_mappings[idx] = list(row) + [0] * (n_buttons - len(row))
 
         super().__init__(self._env)
 

@@ -26,7 +26,24 @@ GET /api/tools/jobs/<id> until status is done, then read .result.
   Newest brain plays; MP4 for review.
 - GET /api/workspaces — games, lineages, resumable heads.
 - GET /api/training/status — live run state.
+- GET /api/games — every game; each entry has source (custom|builtin) and
+  rom_ready. Custom games live in games/<id>/ as full workspaces.
+- POST "/api/games/promote?game_id=<id>" — promote a ROM-ready BUILT-IN game
+  into a custom workspace: copies its stock integration (pre-mapped RAM
+  variables in data.json, scenario, save states) + the imported ROM into
+  games/<id>/. Returns the pre-seeded ram_variables and states.
 - Game configs: GET/PUT /api/games/{id}/config/{data.json|training.json|actions.json|metadata.json}
+
+## Two kinds of games
+
+- BUILT-IN: stable-retro ships ~1000 integrations (RAM maps, scenarios,
+  sometimes save states) but never ROMs. The ROM lives INSIDE the integration
+  directory only after a bulk `retro.import` — check rom_ready in /api/games,
+  NOT games/<id>/ (that directory won't exist yet). To onboard one: promote
+  it first, then run the standard pipeline on the workspace it creates. The
+  pre-seeded RAM variables are a head start — verify them, don't re-discover.
+- CUSTOM: full workspaces under games/<id>/ (either promoted built-ins or
+  ROMs imported from scratch via /api/games/import).
 
 ## Hard rules (paid for in blood)
 
@@ -45,9 +62,12 @@ GET /api/tools/jobs/<id> until status is done, then read .result.
 
 ## Workflows
 
-Onboarding a new game: workspaces -> confirm ROM imported -> define 3-6 RAM
-variables in data.json (ram_capture on scripted/random play + ram_diff around
-marked events; verify candidates by watching values move sensibly) -> draft
+Onboarding a new game: check /api/games for source + rom_ready -> if builtin
+and rom_ready, POST promote (inherits RAM map + states); if builtin without
+ROM, STOP and ask the human for the ROM; if brand new, /api/games/import ->
+verify/extend the 3-6 RAM variables in data.json (ram_capture on scripted/
+random play + ram_diff around marked events; verify candidates by watching
+values move sensibly) -> define actions.json (movement + fire beats NoOp) -> draft
 training.json (progress delta + damage penalty is the proven recipe; wrap/cap
 fixed-width counters) -> reward_probe until green on all states -> build_state
 for a clean start state -> hand off to the human to start training.
