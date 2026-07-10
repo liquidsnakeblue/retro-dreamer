@@ -51,7 +51,17 @@ class RetroDreamerWrapper(gym.Wrapper):
             print(f"[RetroDreamerWrapper] WARNING: ignoring unknown kwargs: {sorted(kwargs)}")
         self.game_id = game_id
         self.game_dir = Path(game_dir)
-        self.initial_state = initial_state.replace(".state", "")
+        # Multi-track rotation: '+'-separated state names ("go+BBP1+SOP1")
+        # rotate randomly per reset. ',' also accepted, but '+' is the
+        # canonical delimiter — a bare comma in a Hydra CLI override value
+        # parses as a choice-sweep and errors out.
+        import re as _re
+        self.initial_states = [
+            s.replace(".state", "")
+            for s in _re.split(r"[+,]", initial_state)
+            if s.strip()
+        ]
+        self.initial_state = self.initial_states[0]
         self.frame_skip = frame_skip
         self.screen_size = screen_size
         self.grayscale = grayscale
@@ -86,9 +96,21 @@ class RetroDreamerWrapper(gym.Wrapper):
             # Fallback: use retro's FILTERED actions (let retro decide)
             self.action_mappings = None  # handled below after env creation
 
-        # Determine state
-        state = self.initial_state
+        # Determine state; preload raw bytes for every rotation entry so
+        # reset() can swap tracks without touching retro's path resolution
+        import gzip as _gzip
         states_dir = self.game_dir / "states"
+        self._state_bytes: Dict[str, bytes] = {}
+        for name in self.initial_states:
+            state_file = states_dir / f"{name}.state"
+            if state_file.exists():
+                with _gzip.open(state_file, "rb") as fh:
+                    self._state_bytes[name] = fh.read()
+            elif len(self.initial_states) > 1:
+                raise FileNotFoundError(
+                    f"rotation state '{name}' not found in {states_dir}"
+                )
+        state = self.initial_state
         if states_dir.exists():
             state_file = states_dir / f"{self.initial_state}.state"
             if state_file.exists():
@@ -155,7 +177,18 @@ class RetroDreamerWrapper(gym.Wrapper):
         if "seed" in kwargs:
             np.random.seed(kwargs["seed"])
 
+        # Multi-track rotation: swap the emulator's restore-state before the
+        # underlying reset applies it (RetroEnv.reset -> em.set_state)
+        if len(self.initial_states) > 1:
+            name = self.initial_states[np.random.randint(len(self.initial_states))]
+            self._env.initial_state = self._state_bytes[name]
+            self._env.statename = f"{name}.state"
+            self._current_track = name
+        else:
+            self._current_track = self.initial_state
+
         obs, info = self._env.reset(**kwargs)
+        info["track_state"] = self._current_track
         self.episode_step = 0
         self.episode_reward = 0.0
         self.prev_info = info
