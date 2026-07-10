@@ -6,14 +6,16 @@ const LIVE_BASE = `http://${window.location.hostname}:8092`
 // Save states verified frame-by-frame 2026-07-09 (F-Zero specific for now;
 // generalize into games/<id> metadata when game #2 lands)
 const TRACKS = [
-  { state: 'go', label: 'Mute City I' },
-  { state: 'BBP1', label: 'Big Blue' },
-  { state: 'SOP1', label: 'Sand Ocean' },
-  { state: 'DWP1', label: 'Death Wind I' },
-  { state: 'SP1', label: 'Silence' },
-  { state: 'PLP1', label: 'Port Town I' },
-  { state: 'WLP1', label: 'White Land I' },
-  { state: 'gp_knight_beginner', label: 'Knight League GP (full race)' },
+  // Real races first — watching = GP mode (training stays practice-only)
+  { state: 'gp_knight_beginner', label: '🏁 GP Race 1 — Mute City I' },
+  { state: 'gp_knight_r2_bigblue', label: '🏁 GP Race 2 — Big Blue' },
+  { state: 'go', label: 'Practice — Mute City I' },
+  { state: 'BBP1', label: 'Practice — Big Blue' },
+  { state: 'SOP1', label: 'Practice — Sand Ocean' },
+  { state: 'DWP1', label: 'Practice — Death Wind I' },
+  { state: 'SP1', label: 'Practice — Silence' },
+  { state: 'PLP1', label: 'Practice — Port Town I' },
+  { state: 'WLP1', label: 'Practice — White Land I' },
 ]
 
 type Mode = 'idle' | 'recording' | 'replay' | 'starting-live' | 'live'
@@ -28,7 +30,7 @@ export function LivePlay() {
   const [percent, setPercent] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [length, setLength] = useState('60')
-  const [track, setTrack] = useState('go')
+  const [track, setTrack] = useState('gp_knight_beginner')
   const [volume, setVolume] = useState(0.7)
   const [error, setError] = useState<string | null>(null)
 
@@ -93,7 +95,7 @@ export function LivePlay() {
     setElapsed(0)
     const ticker = setInterval(() => setElapsed((e) => e + 1), 1000)
     try {
-      await fetch(`${LIVE_BASE}/start`)
+      await fetch(`${LIVE_BASE}/start?state=${encodeURIComponent(track)}`)
       const t0 = Date.now()
       while (true) {
         const r = await fetch(`${LIVE_BASE}/status`).then((r) => r.json()).catch(() => null)
@@ -137,7 +139,7 @@ export function LivePlay() {
           {mode === 'live' && (
             <span className="flex items-center gap-1.5 text-[10px] text-red-400 font-semibold">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-              LIVE — ~6s behind real time
+              LIVE — {TRACKS.find((t) => t.state === track)?.label ?? track}, ~6s behind real time
             </span>
           )}
           {mode === 'replay' && (

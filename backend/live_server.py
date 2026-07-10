@@ -30,6 +30,7 @@ IDLE_KILL_SECONDS = 90
 
 _lock = threading.Lock()
 _session: subprocess.Popen | None = None
+_session_state: str | None = None  # initial_state the running session booted with
 _last_access = 0.0
 _recorder: subprocess.Popen | None = None
 REC_PATH = None  # set in main() after HLS_DIR exists
@@ -49,8 +50,8 @@ def _stop_session_locked():
     _session = None
 
 
-def _start_session_locked():
-    global _session, _last_access
+def _start_session_locked(initial_state: str | None = None):
+    global _session, _session_state, _last_access
     _stop_session_locked()
     # Clear leftovers from the previous session BEFORE spawning: a stale
     # finalized playlist otherwise reports playlist_ready immediately and the
@@ -68,13 +69,17 @@ def _start_session_locked():
     # live edge). CPU holds 1.0x. Set RETRO_LIVE_GPU=1 to override when no
     # training is running.
     env.setdefault("RETRO_LIVE_GPU", "0")
+    cmd = [PYTHON, str(SHEEPRL_DIR / "_retro_live_player.py"), "latest"]
+    if initial_state:
+        cmd.append(initial_state)
     _session = subprocess.Popen(
-        [PYTHON, str(SHEEPRL_DIR / "_retro_live_player.py"), "latest"],
+        cmd,
         cwd=str(SHEEPRL_DIR),
         stdout=subprocess.DEVNULL,
         stderr=open(HLS_DIR / "player.log", "wb"),
         env=env,
     )
+    _session_state = initial_state
     _last_access = time.time()
 
 
@@ -140,16 +145,25 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
 
         if path == "/start":
+            from urllib.parse import parse_qs, urlparse
+
+            requested_state = parse_qs(urlparse(self.path).query).get("state", [None])[0]
             with _lock:
                 # reuse a live session: killing a healthy stream to cold-start
                 # another (~60-90s CPU checkpoint load) punishes an impatient
-                # second click; the idle reaper bounds staleness to ~90s anyway
+                # second click; the idle reaper bounds staleness to ~90s anyway.
+                # Only reuse when it's playing the SAME save state — a track
+                # switch must restart the player.
                 running = _session is not None and _session.poll() is None
-                if running and (HLS_DIR / "live.m3u8").exists():
+                if (
+                    running
+                    and (HLS_DIR / "live.m3u8").exists()
+                    and requested_state == _session_state
+                ):
                     _last_access = time.time()
                     self._send(200, b'{"started": true, "reused": true}')
                     return
-                _start_session_locked()
+                _start_session_locked(requested_state)
             self._send(200, b'{"started": true, "reused": false}')
             return
 
