@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { TrainingStatus } from '../hooks/useTrainingSocket'
 import { useGameStates } from '../hooks/useGameConfig'
 
@@ -11,6 +11,11 @@ const API = '/api'
 
 export function TrainingControls({ status, selectedGame }: TrainingControlsProps) {
   const [modelSize, setModelSize] = useState('large')
+  const [advisor, setAdvisor] = useState<{ gpu: string; vram_gb: number; recommended: string } | null>(null)
+
+  useEffect(() => {
+    fetch(`${API}/advisor/model_size`).then((r) => r.json()).then(setAdvisor).catch(() => {})
+  }, [])
   const [batchSize, setBatchSize] = useState(16)
   // SheepRL units: gradient updates per policy step. Paper "train ratio"
   // = this x1024 (batch 16 x seq 64 replayed frames per update).
@@ -119,6 +124,11 @@ export function TrainingControls({ status, selectedGame }: TrainingControlsProps
             ]}
             disabled={isRunning}
           />
+          {advisor && (
+            <p className="text-[10px] text-retro-text-dim -mt-1">
+              {advisor.gpu} ({advisor.vram_gb}GB) — recommended: <span className={modelSize === advisor.recommended ? 'text-retro-success font-semibold' : 'text-retro-accent font-semibold'}>{advisor.recommended.toUpperCase()}</span>
+            </p>
+          )}
 
           <ControlSelect
             label="Initial State"

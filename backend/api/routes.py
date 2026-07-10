@@ -153,6 +153,29 @@ async def suspend_training():
     return {"status": "suspended", "final_snapshot": ack}
 
 
+@router.get("/advisor/model_size")
+async def model_size_advisor():
+    """Recommend a DreamerV3 size for this machine's GPU. Measured VRAM at
+    batch 16 / seq 64 / AMP on an RTX 5090: XL ~31GB, L ~19GB, S ~7GB."""
+    import torch
+
+    if not torch.cuda.is_available():
+        return {"gpu": None, "vram_gb": 0, "recommended": "debug",
+                "note": "No CUDA GPU visible — debug size only (CPU training is impractical)."}
+    props = torch.cuda.get_device_properties(0)
+    vram = props.total_memory / 1e9
+    tiers = [("xl", 32.0), ("large", 20.0), ("medium", 12.0), ("small", 8.0), ("debug", 0.0)]
+    rec = next(name for name, need in tiers if vram >= need)
+    return {
+        "gpu": props.name,
+        "vram_gb": round(vram, 1),
+        "recommended": rec,
+        "fits": [name for name, need in tiers if vram >= need],
+        "note": "Bigger models score higher AND need less data (DreamerV3 Fig 6c) — "
+                "run the largest size that fits.",
+    }
+
+
 @router.get("/workspaces")
 async def workspaces():
     """Games + lineages + resumable heads, from the training catalog."""
