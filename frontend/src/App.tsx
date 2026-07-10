@@ -7,8 +7,9 @@ import { LogTerminal } from './components/LogTerminal'
 import { GameSelector } from './components/GameSelector'
 import { GameConfigEditor } from './components/GameConfigEditor'
 import { LivePlay } from './components/LivePlay'
+import { CopilotPanel } from './components/CopilotPanel'
 
-type ActiveTab = 'metrics' | 'live' | 'config'
+type ActiveTab = 'metrics' | 'live' | 'config' | 'copilot'
 
 export default function App() {
   const [selectedGame, setSelectedGame] = useState('FZero-Snes')
@@ -74,6 +75,11 @@ export default function App() {
               active={activeTab === 'config'}
               onClick={() => setActiveTab('config')}
             />
+            <TabButton
+              label="Copilot"
+              active={activeTab === 'copilot'}
+              onClick={() => setActiveTab('copilot')}
+            />
           </div>
 
           {/* Tab content */}
@@ -116,6 +122,12 @@ export default function App() {
             {activeTab === 'config' && (
               <div className="h-full">
                 <GameConfigEditor gameId={selectedGame} />
+              </div>
+            )}
+
+            {activeTab === 'copilot' && (
+              <div className="h-full relative">
+                <CopilotPanel />
               </div>
             )}
           </div>
