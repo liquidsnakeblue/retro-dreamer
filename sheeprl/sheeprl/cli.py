@@ -50,6 +50,9 @@ def resume_from_checkpoint(cfg: DictConfig) -> DictConfig:
     old_cfg.algo.pop("total_steps", None)
     old_cfg.algo.pop("learning_starts", None)
     old_cfg.checkpoint.pop("resume_from", None)
+    # How many checkpoints to keep is operational, not experimental — honor
+    # the CLI (keep_last=5 once deleted a peak brain mid-decline).
+    old_cfg.checkpoint.pop("keep_last", None)
     # Whether to restore the replay buffer is a per-resume decision (e.g. the
     # buffer files were lost) -- let the CLI override it instead of clobbering.
     old_cfg.buffer.pop("checkpoint", None)
@@ -61,6 +64,13 @@ def resume_from_checkpoint(cfg: DictConfig) -> DictConfig:
     # because the experiment must continue with the same parameters
     with open_dict(cfg):
         cfg.merge_with(old_cfg.as_dict())
+    # The saved config carries the RESOLVED keep_last inside the
+    # CheckpointCallback entry (the interpolation is lost on save, and list
+    # merge replaces our callbacks wholesale) — pin it back to the setting.
+    for cb in cfg.get("fabric", {}).get("callbacks", []) or []:
+        if "CheckpointCallback" in str(cb.get("_target_", "")):
+            with open_dict(cb):
+                cb["keep_last"] = cfg.checkpoint.keep_last
     return cfg
 
 

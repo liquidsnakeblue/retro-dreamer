@@ -268,6 +268,9 @@ class DreamerV3Trainer:
             "env.video_freq=10",
             f"metric.log_every={cfg.log_every}",
             f"checkpoint.every={cfg.checkpoint_every}",
+            # keep_last=5 deleted the GP run's peak brain (step ~107k) while
+            # returns were already declining — keep a deeper window
+            "checkpoint.keep_last=10",
         ]
 
         # Resume from checkpoint if not a fresh start
