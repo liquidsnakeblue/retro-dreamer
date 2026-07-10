@@ -483,7 +483,13 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
         buffer_size,
         n_envs=cfg.env.num_envs,
         memmap=cfg.buffer.memmap,
-        memmap_dir=os.path.join(log_dir, "memmap_buffer", f"rank_{fabric.global_rank}"),
+        # Stable lineage-owned replay home (studio-v2) when configured —
+        # otherwise the legacy location inside this run's log dir. On resume
+        # the restored buffer replaces this one entirely and keeps ITS paths.
+        memmap_dir=os.path.join(
+            cfg.buffer.memmap_dir or os.path.join(log_dir, "memmap_buffer"),
+            f"rank_{fabric.global_rank}",
+        ),
         buffer_cls=SequentialReplayBuffer,
     )
     if cfg.checkpoint.resume_from and cfg.buffer.checkpoint and "rb" in state:
@@ -762,8 +768,19 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
             last_train = train_step
 
         # Checkpoint Model
-        if (cfg.checkpoint.every > 0 and policy_step - last_checkpoint >= cfg.checkpoint.every) or (
-            iter_num == total_iters and cfg.checkpoint.save_last
+        # Graceful-suspend control channel (studio-v2): the studio writes
+        # <RETRO_CONTROL_DIR>/checkpoint-request; we fold a forced save into
+        # the normal checkpoint path at the next iteration boundary and ack
+        # with checkpoint-complete.json. Safer than checkpointing in a signal
+        # handler, and the requester gets the exact final snapshot path.
+        _control_dir = os.environ.get("RETRO_CONTROL_DIR")
+        _suspend_requested = bool(
+            _control_dir and os.path.exists(os.path.join(_control_dir, "checkpoint-request"))
+        )
+        if (
+            (cfg.checkpoint.every > 0 and policy_step - last_checkpoint >= cfg.checkpoint.every)
+            or (iter_num == total_iters and cfg.checkpoint.save_last)
+            or _suspend_requested
         ):
             fabric.print(f"Saving checkpoint at policy_step={policy_step}, last_checkpoint was {last_checkpoint}")
             last_checkpoint = policy_step
@@ -790,6 +807,18 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                 state=state,
                 replay_buffer=rb if cfg.buffer.checkpoint else None,
             )
+            if _suspend_requested and fabric.is_global_zero:
+                import json as _json
+
+                with open(os.path.join(_control_dir, "checkpoint-complete.json"), "w") as _f:
+                    _json.dump(
+                        {"checkpoint_path": ckpt_path, "step": int(policy_step)}, _f
+                    )
+                try:
+                    os.remove(os.path.join(_control_dir, "checkpoint-request"))
+                except OSError:
+                    pass
+                fabric.print(f"Suspend checkpoint acknowledged at {ckpt_path}")
 
     envs.close()
     if fabric.is_global_zero and cfg.algo.run_test:

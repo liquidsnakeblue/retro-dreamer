@@ -50,6 +50,20 @@ def log(*a):
 
 
 def find_latest_checkpoint() -> Path:
+    # Catalog first (studio-v2): the running session's lineage head — never a
+    # different game's brain just because its file is newer. Legacy mtime scan
+    # only as a fallback for catalog-less installs.
+    try:
+        sys.path.insert(0, str(SHEEPRL_DIR.parent))
+        from backend import catalog as _catalog
+
+        con = _catalog.connect()
+        head = _catalog.get_watch_head(con)
+        con.close()
+        if head:
+            return Path(head["checkpoint_path"])
+    except Exception as exc:
+        log(f"catalog watch-head lookup failed ({exc}); falling back to mtime scan")
     ckpts = sorted(
         SHEEPRL_DIR.glob("logs/runs/dreamer_v3/*/*/version_*/checkpoint/*.ckpt"),
         key=lambda p: p.stat().st_mtime,

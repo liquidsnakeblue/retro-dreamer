@@ -86,6 +86,21 @@ async def start_training(req: TrainingStartRequest):
         config.resume_prefill = req.resume_prefill
 
     _trainer.start(config, fresh_start=req.fresh_start)
+
+    # Persist the exact start request so the watchdog (or a server restart)
+    # can resume WHAT WAS RUNNING instead of hardcoding parameters.
+    try:
+        from pathlib import Path
+        import json as _json
+
+        state_dir = Path(__file__).resolve().parent.parent.parent / "training-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        body = req.model_dump()
+        body["fresh_start"] = False  # a watchdog resume must never fresh-start
+        (state_dir / "last_start_request.json").write_text(_json.dumps(body, indent=2))
+    except Exception as exc:
+        print(f"[API] failed to persist last_start_request: {exc}")
+
     return {
         "status": "started",
         "model_size": req.model_size,
@@ -99,8 +114,52 @@ async def start_training(req: TrainingStartRequest):
 async def stop_training():
     if _trainer is None:
         raise HTTPException(500, "Trainer not initialized")
-    _trainer.stop()
-    return {"status": "stopped"}
+    ack = _trainer.stop()  # graceful by default; SIGTERM fallback inside
+    return {"status": "stopped", "final_snapshot": ack}
+
+
+@router.post("/training/suspend")
+async def suspend_training():
+    """Graceful suspend: force a final checkpoint via the control channel,
+    register it as the lineage's resumable head, then stop. The returned
+    snapshot is guaranteed loss-free (no steps discarded)."""
+    if _trainer is None:
+        raise HTTPException(500, "Trainer not initialized")
+    ack = _trainer.stop(graceful=True, timeout=180.0)
+    return {"status": "suspended", "final_snapshot": ack}
+
+
+@router.get("/workspaces")
+async def workspaces():
+    """Games + lineages + resumable heads, from the training catalog."""
+    from backend import catalog as _catalog
+
+    con = _catalog.connect()
+    out = []
+    for g in con.execute("SELECT * FROM games"):
+        lineages = []
+        for ln in con.execute(
+            "SELECT * FROM lineages WHERE game_id=? ORDER BY created_at", (g["id"],)
+        ):
+            head = _catalog.get_resumable_head(con, g["id"], ln["name"])
+            running = con.execute(
+                "SELECT COUNT(*) c FROM sessions WHERE lineage_id=? AND status='running'",
+                (ln["id"],),
+            ).fetchone()["c"]
+            lineages.append({
+                "name": ln["name"],
+                "status": ln["status"],
+                "running": bool(running),
+                "head_step": head["step"] if head else None,
+                "head_checkpoint": head["checkpoint_path"] if head else None,
+            })
+        out.append({
+            "game_id": g["id"],
+            "display_name": g["display_name"],
+            "lineages": lineages,
+        })
+    con.close()
+    return {"workspaces": out}
 
 
 @router.post("/training/pause")

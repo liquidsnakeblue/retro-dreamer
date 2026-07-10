@@ -7,6 +7,7 @@ process and monitor its TensorBoard logs, checkpoints, and videos.
 Our dashboard observes and controls the process.
 """
 
+import json
 import os
 import sys
 import time
@@ -21,6 +22,10 @@ import torch
 
 from .config import TrainingConfig
 from .callbacks import TensorBoardCallback, WebSocketBroadcaster, EpisodeRenderer
+from backend import catalog as _catalog
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+STATE_DIR = PROJECT_ROOT / "training-state"
 
 
 # The vendored SheepRL tree lives at PROJECT_ROOT/sheeprl/ (repo root, containing the
@@ -128,6 +133,11 @@ class DreamerV3Trainer:
         # Active run directory (set when training starts)
         self._run_dir: Optional[Path] = None
 
+        # Studio-v2: graceful-suspend channel + catalog session tracking
+        self._control_dir: Optional[Path] = None
+        self._catalog_session_id: Optional[int] = None
+        self._session_run_dir: Optional[Path] = None
+
         # Ring buffer of recent log lines (200 lines)
         self._log_lines: deque[str] = deque(maxlen=200)
 
@@ -191,9 +201,33 @@ class DreamerV3Trainer:
             self.state = TrainingState.ERROR
             raise
 
-    def stop(self):
-        """Kill the SheepRL subprocess."""
+    def stop(self, graceful: bool = True, timeout: float = 90.0) -> Optional[dict]:
+        """Stop training. Graceful path (default): request a final checkpoint
+        via the control channel, wait for the ack, then terminate — no steps
+        lost. Falls back to plain SIGTERM if the channel is absent or slow.
+
+        Returns the suspend ack ({checkpoint_path, step}) when one was written.
+        """
         self.state = TrainingState.STOPPING
+        ack = None
+        alive = self._process and self._process.poll() is None
+        if graceful and alive and self._control_dir:
+            try:
+                (self._control_dir / "checkpoint-request").write_text("1")
+                complete = self._control_dir / "checkpoint-complete.json"
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    if complete.exists():
+                        ack = json.loads(complete.read_text())
+                        print(f"[Trainer] Graceful suspend: final checkpoint {ack.get('checkpoint_path')}")
+                        break
+                    if self._process.poll() is not None:
+                        break
+                    time.sleep(0.5)
+                else:
+                    print("[Trainer] Suspend ack timed out — falling back to SIGTERM")
+            except Exception as exc:
+                print(f"[Trainer] Graceful suspend failed ({exc}) — falling back to SIGTERM")
         if self._process and self._process.poll() is None:
             try:
                 self._process.terminate()
@@ -204,7 +238,11 @@ class DreamerV3Trainer:
             except Exception:
                 pass
         self._process = None
+        self._catalog_session_end("ended", "stopped by studio")
+        if ack:
+            self._catalog_register_snapshot_path(ack.get("checkpoint_path"), ack.get("step"))
         self.state = TrainingState.IDLE
+        return ack
 
     def pause(self):
         """Not supported in subprocess mode."""
@@ -273,11 +311,24 @@ class DreamerV3Trainer:
             "checkpoint.keep_last=10",
         ]
 
+        # Stable lineage-owned replay home (used when the buffer is created
+        # fresh; a restored buffer keeps its own paths). New lineages never
+        # write replay inside run dirs.
+        replay_dir = STATE_DIR / "games" / game_id / "lineages" / "main" / "replay"
+        replay_dir.mkdir(parents=True, exist_ok=True)
+        cmd.append(f"buffer.memmap_dir={replay_dir}")
+
         # Resume from checkpoint if not a fresh start
         if self._fresh_start:
             print("[Trainer] Fresh start — skipping checkpoint resume")
         else:
-            resume_ckpt = self._find_latest_checkpoint()
+            resume_ckpt = self._catalog_resumable_head(game_id)
+            if resume_ckpt:
+                print(f"[Trainer] Catalog head: {resume_ckpt}")
+            else:
+                # Catalog empty for this game — legacy mtime scan (still
+                # game-scoped) so old installs keep resuming.
+                resume_ckpt = self._find_latest_checkpoint()
             if resume_ckpt:
                 cmd.append(f'checkpoint.resume_from="{resume_ckpt}"')
                 if cfg.resume_prefill > 0:
@@ -303,12 +354,18 @@ class DreamerV3Trainer:
         # remove the fragmentation failure mode.
         env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
+        # Graceful-suspend control channel (studio-v2)
+        self._control_dir = STATE_DIR / "control" / f"session-{int(time.time())}"
+        self._control_dir.mkdir(parents=True, exist_ok=True)
+        env["RETRO_CONTROL_DIR"] = str(self._control_dir)
+
         print(
             f"[Trainer] Launching SheepRL "
             f"({algo}, game={game_id}, state={initial_state}, batch={cfg.batch_size})..."
         )
         print(f"[Trainer] Command: {' '.join(cmd)}")
 
+        launch_ts = time.time()
         self._process = subprocess.Popen(
             cmd,
             cwd=str(SHEEPRL_DIR),
@@ -322,6 +379,131 @@ class DreamerV3Trainer:
         # Start log monitoring thread
         self._log_thread = threading.Thread(target=self._monitor_process, daemon=True)
         self._log_thread.start()
+        # Register the session in the catalog once the run dir materializes
+        threading.Thread(
+            target=self._catalog_register_session, args=(game_id, launch_ts), daemon=True
+        ).start()
+
+    # ------------------------------------------------------------------
+    # Catalog integration (best-effort: catalog failures must never take
+    # down training itself)
+    # ------------------------------------------------------------------
+
+    def _catalog_resumable_head(self, game_id: str) -> Optional[str]:
+        try:
+            con = _catalog.connect()
+            # Re-crawl before resolving: checkpoints written while no live
+            # registrar was running (old code, crashes, manual runs) would
+            # otherwise leave the catalog behind the filesystem — that
+            # near-missed a 545k-step rewind on 2026-07-10. Idempotent+fast.
+            _catalog.register_existing_runs(con, game_filter=game_id)
+            head = _catalog.get_resumable_head(con, game_id)
+            con.close()
+            return head["checkpoint_path"] if head else None
+        except Exception as exc:
+            print(f"[Trainer] catalog head lookup failed: {exc}")
+            return None
+
+    def _catalog_register_session(self, game_id: str, launch_ts: float):
+        """Wait for the child's run dir to appear, then record the session."""
+        logs = _sheeprl_logs(game_id)
+        run_dir = None
+        for _ in range(240):  # up to 2 min (model load can be slow)
+            candidates = [
+                d for d in logs.glob("*/version_0")
+                if d.stat().st_mtime >= launch_ts - 2
+            ] if logs.exists() else []
+            if candidates:
+                run_dir = max(candidates, key=lambda d: d.stat().st_mtime)
+                break
+            if self._process is None or self._process.poll() is not None:
+                return
+            time.sleep(0.5)
+        if run_dir is None:
+            print("[Trainer] catalog: run dir never appeared; session unregistered")
+            return
+        try:
+            con = _catalog.connect()
+            con.execute(
+                "INSERT OR IGNORE INTO games (id, display_name) VALUES (?,?)",
+                (game_id, game_id),
+            )
+            row = con.execute(
+                "SELECT active_lineage_id FROM games WHERE id=?", (game_id,)
+            ).fetchone()
+            lineage_id = row["active_lineage_id"] if row else None
+            if lineage_id is None:
+                con.execute(
+                    """INSERT OR IGNORE INTO lineages (game_id, name, status, created_at)
+                       VALUES (?,?,'active',?)""",
+                    (game_id, "main", time.time()),
+                )
+                lineage_id = con.execute(
+                    "SELECT id FROM lineages WHERE game_id=? AND name='main'", (game_id,)
+                ).fetchone()["id"]
+                con.execute(
+                    "UPDATE games SET active_lineage_id=? WHERE id=?", (lineage_id, game_id)
+                )
+            con.execute(
+                """INSERT OR IGNORE INTO sessions
+                   (lineage_id, run_dir, started_at, status, resolved_config)
+                   VALUES (?,?,?,'running',?)""",
+                (lineage_id, str(run_dir), launch_ts, str(run_dir / "config.yaml")),
+            )
+            self._catalog_session_id = con.execute(
+                "SELECT id FROM sessions WHERE run_dir=?", (str(run_dir),)
+            ).fetchone()["id"]
+            self._session_run_dir = run_dir
+            con.commit()
+            con.close()
+            print(f"[Trainer] catalog: session {self._catalog_session_id} = {run_dir}")
+        except Exception as exc:
+            print(f"[Trainer] catalog session registration failed: {exc}")
+
+    def _catalog_register_snapshot_step(self, step: int):
+        if self._catalog_session_id is None or self._session_run_dir is None:
+            return
+        path = self._session_run_dir / "checkpoint" / f"ckpt_{step}_0.ckpt"
+        self._catalog_register_snapshot_path(str(path), step)
+
+    def _catalog_register_snapshot_path(self, path: Optional[str], step: Optional[int]):
+        if not path or self._catalog_session_id is None:
+            return
+        # The child reports log_dir-relative paths (its cwd is SHEEPRL_DIR);
+        # the catalog stores absolutes so existence checks work from anywhere.
+        if not os.path.isabs(path):
+            path = str((SHEEPRL_DIR / path).resolve())
+        try:
+            con = _catalog.connect()
+            replay = STATE_DIR / "games" / self.config.game_id / "lineages" / "main" / "replay"
+            _catalog.register_snapshot(
+                con, self._catalog_session_id, int(step or 0), str(path),
+                replay_path=str(replay) if replay.exists() else None,
+            )
+            con.execute(
+                "UPDATE sessions SET end_step=? WHERE id=?",
+                (int(step or 0), self._catalog_session_id),
+            )
+            con.commit()
+            con.close()
+        except Exception as exc:
+            print(f"[Trainer] catalog snapshot registration failed: {exc}")
+
+    def _catalog_session_end(self, status: str, reason: str):
+        if self._catalog_session_id is None:
+            return
+        try:
+            con = _catalog.connect()
+            con.execute(
+                "UPDATE sessions SET status=?, exit_reason=?, ended_at=? WHERE id=?",
+                (status, reason, time.time(), self._catalog_session_id),
+            )
+            con.commit()
+            con.close()
+        except Exception as exc:
+            print(f"[Trainer] catalog session end failed: {exc}")
+        self._catalog_session_id = None
+        self._session_run_dir = None
 
     def _monitor_process(self):
         """Monitor subprocess output and detect completion/errors."""
@@ -350,6 +532,12 @@ class DreamerV3Trainer:
                 self.metrics.parse_log_line(line)
             except Exception as exc:
                 print(f"[Trainer] metric parse error on {line!r}: {exc!r}")
+            if "Saving checkpoint at policy_step=" in line:
+                try:
+                    step = int(line.split("policy_step=")[1].split(",")[0])
+                    self._catalog_register_snapshot_step(step)
+                except (ValueError, IndexError):
+                    pass
             self._log_lines.append(line)
             print(f"[SheepRL] {line}")
 
@@ -359,9 +547,11 @@ class DreamerV3Trainer:
                 f"SheepRL exited with code {exit_code}. Last output: {last_line}"
             )
             self.state = TrainingState.ERROR
+            self._catalog_session_end("crashed", self._error_message[:300])
             print(f"[Trainer] ERROR: {self._error_message}")
         elif self.state == TrainingState.TRAINING:
             self.state = TrainingState.IDLE
+            self._catalog_session_end("ended", "completed")
             print("[Trainer] Training completed normally.")
 
     def _find_latest_checkpoint(self) -> Optional[str]:

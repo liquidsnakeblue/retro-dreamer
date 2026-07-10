@@ -1,5 +1,6 @@
 size: ???
 memmap: True
+memmap_dir: null  # stable replay home (studio-v2); null = inside the run dir
 validate_args: False
 from_numpy: False
 checkpoint: True  # Used only for off-policy algorithms

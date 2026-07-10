@@ -112,6 +112,30 @@ def get_resumable_head(con, game_id: str, lineage_name: str = None) -> Optional[
     return None
 
 
+def get_watch_head(con) -> Optional[sqlite3.Row]:
+    """Best brain to WATCH right now: the running session's lineage head if
+    training is live, else the newest existing snapshot across active lineages."""
+    row = con.execute(
+        """SELECT l.game_id, l.name FROM sessions sess
+           JOIN lineages l ON sess.lineage_id = l.id
+           WHERE sess.status='running' ORDER BY sess.started_at DESC LIMIT 1"""
+    ).fetchone()
+    if row:
+        head = get_resumable_head(con, row["game_id"], row["name"])
+        if head:
+            return head
+    for snap in con.execute(
+        """SELECT s.* FROM snapshots s
+           JOIN sessions x ON s.session_id=x.id
+           JOIN lineages l ON x.lineage_id=l.id
+           WHERE l.status='active' AND s.kind='resume'
+           ORDER BY s.created_at DESC"""
+    ):
+        if Path(snap["checkpoint_path"]).exists():
+            return snap
+    return None
+
+
 def register_snapshot(con, session_id: int, step: int, checkpoint_path: str,
                       replay_path: str = None, kind: str = "resume",
                       metrics: dict = None) -> int:

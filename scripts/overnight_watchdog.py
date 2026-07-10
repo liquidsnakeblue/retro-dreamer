@@ -26,14 +26,17 @@ POLL = 60
 ARCHIVE_EVERY = 3600
 MAX_RESTARTS = 5
 KEEP_ARCHIVES = 8
-RESUME_BODY = json.dumps({
-    "model_size": "xl",
-    "initial_state": "go+BBP1+SOP1+DWP1+SP1",
-    "num_envs": 6,
-    "fresh_start": False,
-}).encode()
 
 ROOT = Path(__file__).resolve().parent.parent
+LAST_REQUEST = ROOT / "training-state" / "last_start_request.json"
+
+
+def resume_body() -> bytes:
+    """Resume WHAT WAS RUNNING: the API persists every start request to
+    training-state/last_start_request.json (fresh_start forced False)."""
+    body = json.loads(LAST_REQUEST.read_text())
+    body["fresh_start"] = False
+    return json.dumps(body).encode()
 CKPT_GLOB = str(ROOT / "sheeprl/logs/runs/dreamer_v3/*/*/version_*/checkpoint/*.ckpt")
 ARCHIVE_DIR = ROOT / "sheeprl/logs/overnight_ckpt_archive"
 LOG = Path(__file__).with_suffix(".log")
@@ -105,7 +108,7 @@ def main():
                 time.sleep(backoff)
                 api("/training/stop", b"{}")
                 time.sleep(5)
-                res = api("/training/start", RESUME_BODY)
+                res = api("/training/start", resume_body())
                 restarts += 1
                 last_restart_t = time.time()
                 seen_training = False
