@@ -1,6 +1,6 @@
 """REST API routes for training control, data access, and game management."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pathlib import Path
@@ -365,6 +365,48 @@ async def put_game_config(game_id: str, filename: str, data: dict):
         raise HTTPException(404, str(exc))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+@router.post("/games/import")
+async def import_game(
+    game_id: str,
+    display_name: str,
+    system: str,
+    rom: "UploadFile" = None,
+):
+    """One-shot game onboarding entry point: scaffold a workspace and drop
+    the user's ROM into it. The RAM workbench / reward builder take it from
+    there. We never ship or fetch ROMs — the file comes from the user."""
+    if _game_manager is None:
+        raise HTTPException(500, "GameManager not initialized")
+    if rom is None:
+        raise HTTPException(400, "multipart 'rom' file is required")
+    import hashlib
+    from pathlib import Path as _P
+
+    ext = _P(rom.filename or "rom.bin").suffix.lower() or ".bin"
+    try:
+        game_dir = _game_manager.create_game(game_id, display_name, system)
+    except FileExistsError as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    body = await rom.read()
+    (game_dir / f"rom{ext}").write_bytes(body)
+    (game_dir / "rom.sha").write_text(hashlib.sha1(body).hexdigest() + "\n")
+    return {
+        "status": "imported",
+        "game_id": game_id,
+        "game_dir": str(game_dir),
+        "rom_bytes": len(body),
+        "rom_sha1": hashlib.sha1(body).hexdigest(),
+        "next_steps": [
+            "define RAM variables in data.json (RAM workbench / ram_capture + ram_diff tools)",
+            "define reward + done in training.json (reward builder; validate with reward_probe)",
+            "capture at least one save state (build_state tool)",
+            "start training",
+        ],
+    }
 
 
 @router.post("/games")

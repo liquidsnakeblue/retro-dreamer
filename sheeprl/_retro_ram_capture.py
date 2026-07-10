@@ -92,7 +92,7 @@ n = int(sizes.sum())
 print(f"RAM blocks: {[(hex(o), s) for o, s in zip(offsets, sizes)]} total={n}", flush=True)
 
 ram = np.zeros((max_steps, n), dtype=np.uint8)
-vars_log = {k: np.zeros(max_steps, dtype=np.float64) for k in ("health", "pos", "speed", "reverse")}
+vars_log = None  # keyed off the game's actual info vars at first step
 
 obs = env.reset(seed=cfg.seed)[0]
 player.num_envs = 1
@@ -109,12 +109,17 @@ for step in range(max_steps):
         real_actions.reshape(env.action_space.shape)
     )
     ram[step] = retro_env.get_ram()
+    if vars_log is None:
+        vars_log = {
+            k: np.zeros(max_steps, dtype=np.float64)
+            for k, v in info.items() if isinstance(v, (int, float))
+        }
     for k in vars_log:
         vars_log[k][step] = info.get(k, np.nan)
     steps_done = step + 1
     if steps_done % 500 == 0:
-        print(f"step={steps_done} health={info.get('health')} pos={info.get('pos')} "
-              f"speed={info.get('speed')} ({steps_done / (time.perf_counter() - t0):.0f} steps/s)",
+        print(f"step={steps_done} vars={ {k: info.get(k) for k in list(vars_log)[:5]} } "
+              f"({steps_done / (time.perf_counter() - t0):.0f} steps/s)",
               flush=True)
     if terminated or truncated:
         print(f"env ended early at step {steps_done} term={terminated} trunc={truncated}", flush=True)
@@ -127,7 +132,13 @@ np.savez_compressed(
     sizes=sizes,
     ckpt=str(ckpt_path.name),
     state=initial_state,
-    **{k: v[:steps_done] for k, v in vars_log.items()},
+    **{k: v[:steps_done] for k, v in (vars_log or {}).items()},
 )
 print(f"saved {out_path} steps={steps_done}", flush=True)
 env.close()
+import json as _json
+
+print("RESULT " + _json.dumps({
+    "npz": str(out_path), "steps": int(steps_done),
+    "vars_logged": sorted(vars_log) if vars_log else [],
+}), flush=True)

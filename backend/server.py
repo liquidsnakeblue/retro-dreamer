@@ -28,6 +28,7 @@ from backend.training.trainer import DreamerV3Trainer
 from backend.training.config import TrainingConfig
 from backend.training.callbacks import WebSocketBroadcaster
 from backend.api.routes import router as api_router, set_dependencies
+from backend.tools import router as tools_router
 from backend.api.ws import ConnectionManager
 
 # Global state
@@ -145,6 +146,7 @@ app.add_middleware(
 
 # API routes
 app.include_router(api_router)
+app.include_router(tools_router)
 
 
 # WebSocket endpoint
