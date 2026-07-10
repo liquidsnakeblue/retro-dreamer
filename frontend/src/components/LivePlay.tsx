@@ -3,6 +3,19 @@ import Hls from 'hls.js'
 
 const LIVE_BASE = `http://${window.location.hostname}:8092`
 
+// Save states verified frame-by-frame 2026-07-09 (F-Zero specific for now;
+// generalize into games/<id> metadata when game #2 lands)
+const TRACKS = [
+  { state: 'go', label: 'Mute City I' },
+  { state: 'BBP1', label: 'Big Blue' },
+  { state: 'SOP1', label: 'Sand Ocean' },
+  { state: 'DWP1', label: 'Death Wind I' },
+  { state: 'SP1', label: 'Silence' },
+  { state: 'PLP1', label: 'Port Town I' },
+  { state: 'WLP1', label: 'White Land I' },
+  { state: 'gp_knight_beginner', label: 'Knight League GP (full race)' },
+]
+
 type Mode = 'idle' | 'recording' | 'replay' | 'starting-live' | 'live'
 
 /** Watch the newest checkpoint play. Primary flow: record an episode to a
@@ -15,6 +28,7 @@ export function LivePlay() {
   const [percent, setPercent] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [length, setLength] = useState('60')
+  const [track, setTrack] = useState('go')
   const [volume, setVolume] = useState(0.7)
   const [error, setError] = useState<string | null>(null)
 
@@ -45,7 +59,7 @@ export function LivePlay() {
     setElapsed(0)
     const ticker = setInterval(() => setElapsed((e) => e + 1), 1000)
     try {
-      await fetch(`${LIVE_BASE}/record?seconds=${length}`)
+      await fetch(`${LIVE_BASE}/record?seconds=${length}&state=${encodeURIComponent(track)}`)
       const t0 = Date.now()
       while (true) {
         await new Promise((r) => setTimeout(r, 1000))
@@ -128,7 +142,7 @@ export function LivePlay() {
           )}
           {mode === 'replay' && (
             <span className="text-[10px] text-retro-success font-semibold">
-              RECORDED — newest checkpoint, loops
+              RECORDED — {TRACKS.find((t) => t.state === track)?.label ?? track}, newest checkpoint, loops
             </span>
           )}
         </div>
@@ -141,6 +155,16 @@ export function LivePlay() {
               className="w-24 accent-retro-accent"
             />
           </div>
+          <select
+            value={track}
+            onChange={(e) => setTrack(e.target.value)}
+            disabled={busy}
+            className="bg-retro-surface border border-retro-border rounded text-xs px-2 py-1.5 text-retro-text"
+          >
+            {TRACKS.map((t) => (
+              <option key={t.state} value={t.state}>{t.label}</option>
+            ))}
+          </select>
           <select
             value={length}
             onChange={(e) => setLength(e.target.value)}
