@@ -100,22 +100,24 @@ export function GameSelector({ selectedGame, onSelect }: GameSelectorProps) {
   const ws = workspaces.find((w) => w.game_id === selectedGame)
   const mainLineage = ws?.lineages.find((l) => l.status === 'active') ?? ws?.lineages[0]
 
-  // Split into custom and built-in, filter by search
-  const { customGames, builtinGames } = useMemo(() => {
+  // Split into custom / ROM-ready built-ins / ROM-less shells, filter by search
+  const { customGames, readyGames, shellGames } = useMemo(() => {
     const q = search.toLowerCase()
     const custom: any[] = []
-    const builtin: any[] = []
+    const ready: any[] = []
+    const shells: any[] = []
     for (const g of games) {
       const gid = g.game_id || g.id || ''
       const name = g.display_name || gid
       if (q && !name.toLowerCase().includes(q) && !gid.toLowerCase().includes(q)) continue
-      if (g.source === 'builtin') builtin.push(g)
-      else custom.push(g)
+      if (g.source !== 'builtin') custom.push(g)
+      else if (g.rom_ready) ready.push(g)
+      else shells.push(g)
     }
-    return { customGames: custom, builtinGames: builtin }
+    return { customGames: custom, readyGames: ready, shellGames: shells }
   }, [games, search])
 
-  const totalShown = customGames.length + builtinGames.length
+  const totalShown = customGames.length + readyGames.length + shellGames.length
 
   return (
     <div className="bg-retro-card rounded-lg border border-retro-border overflow-hidden">
@@ -164,11 +166,24 @@ export function GameSelector({ selectedGame, onSelect }: GameSelectorProps) {
             </optgroup>
           )}
 
-          {builtinGames.length > 0 && (
-            <optgroup label={`Built-in (${builtinGames.length})`}>
-              {builtinGames.map((g: any) => {
+          {readyGames.length > 0 && (
+            <optgroup label={`Built-in — ROM ready (${readyGames.length})`}>
+              {readyGames.map((g: any) => {
                 const gid = g.game_id || g.id
                 return <option key={gid} value={gid}>{g.display_name || gid}</option>
+              })}
+            </optgroup>
+          )}
+
+          {shellGames.length > 0 && (
+            <optgroup label={`Built-in — no ROM (${shellGames.length})`}>
+              {shellGames.map((g: any) => {
+                const gid = g.game_id || g.id
+                return (
+                  <option key={gid} value={gid} className="text-retro-text-dim/60">
+                    {g.display_name || gid}
+                  </option>
+                )
               })}
             </optgroup>
           )}
@@ -186,6 +201,12 @@ export function GameSelector({ selectedGame, onSelect }: GameSelectorProps) {
                 <span className="text-retro-text-dim">built-in</span>
               ) : (
                 <span className="text-retro-success">custom</span>
+              )}
+              {' · '}
+              {current.rom_ready ? (
+                <span className="text-retro-success">ROM ✔</span>
+              ) : (
+                <span className="text-retro-danger">no ROM</span>
               )}
               {' · '}
               {mainLineage?.running ? (

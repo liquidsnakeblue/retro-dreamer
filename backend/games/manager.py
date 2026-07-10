@@ -85,6 +85,9 @@ class GameManager:
                 meta["game_id"] = game_id
                 meta["source"] = "custom"
                 meta["has_custom_config"] = True
+                meta["rom_ready"] = any(
+                    p.suffix != ".sha" for p in entry.glob("rom.*")
+                )
                 seen.add(game_id)
                 games.append(meta)
             except Exception as exc:
@@ -109,12 +112,21 @@ class GameManager:
                 if system:
                     display += f" ({system})"
 
+                # ROM presence: stable-retro ships integrations WITHOUT roms;
+                # only hash-matched imports (python -m retro.import) fill them
+                try:
+                    retro.data.get_romfile_path(game_id)
+                    rom_ready = True
+                except Exception:
+                    rom_ready = False
+
                 games.append({
                     "game_id": game_id,
                     "display_name": display,
                     "system": system,
                     "source": "builtin",
                     "has_custom_config": False,
+                    "rom_ready": rom_ready,
                 })
         except Exception as exc:
             print(f"[GameManager] Could not list built-in games: {exc}")

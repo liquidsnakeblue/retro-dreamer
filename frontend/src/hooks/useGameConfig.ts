@@ -10,6 +10,7 @@ export interface GameInfo {
   source: 'custom' | 'builtin'
   has_custom_config?: boolean
   rom_path?: string
+  rom_ready?: boolean
 }
 
 export function useGameList() {
