@@ -75,6 +75,20 @@ def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
     return con
 
 
+def close_orphaned_sessions(con) -> int:
+    """Close any 'running' session rows. Sessions are owned by the live server
+    process, so at server startup every 'running' row is an orphan from a
+    previous server (crash or bounce) — and one orphan makes its lineage
+    report running=true forever (sidebar, /workspaces, copilot all lie)."""
+    cur = con.execute(
+        "UPDATE sessions SET status='ended', ended_at=?, "
+        "exit_reason='orphaned (server restart)' WHERE status='running'",
+        (time.time(),),
+    )
+    con.commit()
+    return cur.rowcount
+
+
 # ------------------------------------------------------------------
 # Head resolution — THE replacement for mtime scanning
 # ------------------------------------------------------------------

@@ -92,6 +92,15 @@ async def lifespan(app: FastAPI):
     # Inject both into routes
     set_dependencies(trainer, game_manager)
 
+    # A previous server that crashed/bounced mid-training leaves its session
+    # row 'running' forever, which poisons every running-state readout
+    from backend import catalog as _catalog
+    _con = _catalog.connect()
+    _orphans = _catalog.close_orphaned_sessions(_con)
+    _con.close()
+    if _orphans:
+        print(f"[Server] closed {_orphans} orphaned training session row(s)")
+
     # Point TensorBoard at SheepRL's log directory for the default game
     tb_logdir = trainer.get_tensorboard_logdir()
     start_tensorboard(tb_logdir)

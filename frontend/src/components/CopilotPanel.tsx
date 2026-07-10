@@ -29,6 +29,14 @@ export function CopilotPanel() {
       try {
         const d = await fetch(`${API}/events?since=${lastSeq.current}`).then((r) => r.json())
         setRunning(d.running)
+        if (d.last_seq < lastSeq.current) {
+          // Copilot (or server) restarted: seq space rewound. Reset so the
+          // next poll refetches the new session from 0 — otherwise the panel
+          // silently ignores everything until seq outgrows the old session.
+          lastSeq.current = 0
+          setEvents([])
+          return
+        }
         if (d.events?.length) {
           lastSeq.current = d.last_seq
           setEvents((prev) => [...prev, ...d.events].slice(-400))

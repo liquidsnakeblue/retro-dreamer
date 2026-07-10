@@ -115,11 +115,13 @@ class StartReq(BaseModel):
 
 @router.post("/start")
 def start(req: StartReq = None):
-    global _proc, _events, _seq
+    global _proc, _events
     with _lock:
         if _proc is not None and _proc.poll() is None:
             return {"status": "already_running"}
-        _events, _seq = [], 0
+        # Clear history but do NOT reset _seq: pollers track last-seen seq,
+        # and a rewind makes them silently ignore the new session.
+        _events = []
     _ensure_proxy()
     env = os.environ.copy()
     env["CLAUDE_CONFIG_DIR"] = str(CONFIG_DIR)
