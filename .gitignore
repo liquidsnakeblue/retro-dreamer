@@ -51,3 +51,4 @@ sheeprl/sheeprl/_retro_run.py
 Thumbs.db
 *:Zone.Identifier
 sheeprl/_retro_run.py
+training-state/
