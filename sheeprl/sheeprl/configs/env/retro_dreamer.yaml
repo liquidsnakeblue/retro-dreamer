@@ -6,7 +6,7 @@ defaults:
 # Override from default config
 id: retro-dreamer
 num_envs: 1
-frame_stack: 4
+frame_stack: 1
 frame_skip: 4
 screen_size: 64
 max_episode_steps: 10000

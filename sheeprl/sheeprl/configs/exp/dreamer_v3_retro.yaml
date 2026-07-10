@@ -12,7 +12,10 @@ seed: 42
 # Environment — game_id, game_dir, initial_state set via CLI overrides
 env:
   num_envs: 8
-  frame_stack: 4
+  # No frame stacking — the RSSM carries motion; the DreamerV3 paper uses
+  # none. The old "4" here was never live: dreamer_v3.py force-stamps
+  # frame_stack=-1 at startup ("These arguments cannot be changed").
+  frame_stack: 1
   frame_skip: 4
   max_episode_steps: 10000
   capture_video: True
@@ -39,9 +42,8 @@ algo:
       - rgb
   mlp_keys:
     encoder: []
-  world_model:
-    encoder:
-      cnn_channels_multiplier: 48
+  # CNN widths come from the algo size preset (S=32, L=64, ...) — an
+  # encoder-only 48 override here would give L a mismatched encoder/decoder.
   actor:
     cls: sheeprl.algos.dreamer_v3.agent.Actor
     ent_coef: 0.002
