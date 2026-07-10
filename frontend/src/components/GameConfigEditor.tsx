@@ -269,6 +269,49 @@ function JsonEditor({ gameId, filename }: JsonEditorProps) {
   const [saveError, setSaveError] = useState('')
   const [saveOk, setSaveOk] = useState(false)
   const [jsonError, setJsonError] = useState('')
+  const [probing, setProbing] = useState(false)
+  const [probeMsg, setProbeMsg] = useState('')
+
+  // Reward-builder validation: run the constant-action probe against the
+  // SAVED training.json and report formula deviation / fountains / dones.
+  async function handleValidate() {
+    setProbing(true)
+    setProbeMsg('probing…')
+    try {
+      const statesRes = await fetch(`${API}/games/${encodeURIComponent(gameId)}/states`)
+      const statesData = await statesRes.json()
+      const states: string[] = (statesData.states || []).slice(0, 3)
+      if (!states.length) throw new Error('no save states to probe')
+      const { job_id } = await fetch(`${API}/tools/reward_probe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game_id: gameId, states, steps: 300, actions: 'all' }),
+      }).then(r => r.json())
+      const t0 = Date.now()
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000))
+        const j = await fetch(`${API}/tools/jobs/${job_id}`).then(r => r.json())
+        if (j.status === 'done') {
+          const v = j.result
+          setProbeMsg(
+            v?.ok
+              ? `✔ reward matches formula on ${v.probes.length} probes` +
+                (v.never_done.length ? ` · never-done: ${v.never_done.length}` : '')
+              : `✘ PROBE FAILED: max deviation ${Math.max(...v.probes.map((p: any) => p.reward_formula_max_deviation))}` +
+                (v.fountains.length ? ` · ${v.fountains.length} fountain(s)!` : '')
+          )
+          break
+        }
+        if (j.status === 'failed') throw new Error(`probe job failed (see ${job_id})`)
+        if (Date.now() - t0 > 300000) throw new Error('probe timeout')
+        setProbeMsg(`probing… (${Math.round((Date.now() - t0) / 1000)}s)`)
+      }
+    } catch (e) {
+      setProbeMsg(`✘ ${(e as Error).message}`)
+    } finally {
+      setProbing(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -352,6 +395,21 @@ function JsonEditor({ gameId, filename }: JsonEditorProps) {
         >
           Reset
         </button>
+        {filename === 'training.json' && (
+          <button
+            onClick={handleValidate}
+            disabled={probing || saving}
+            title="Run the constant-action reward probe against the saved config"
+            className="text-xs px-3 py-1.5 bg-retro-accent/90 hover:brightness-110 text-black rounded transition-colors disabled:opacity-50"
+          >
+            {probing ? 'Probing…' : '🧪 Validate'}
+          </button>
+        )}
+        {probeMsg && (
+          <span className={`text-[10px] ${probeMsg.startsWith('✔') ? 'text-retro-success' : probeMsg.startsWith('✘') ? 'text-retro-danger' : 'text-retro-text-dim'}`}>
+            {probeMsg}
+          </span>
+        )}
         {saveOk && <span className="text-xs text-retro-success">Saved!</span>}
         {(saveError || jsonError) && (
           <span className="text-xs text-retro-danger truncate max-w-xs">
