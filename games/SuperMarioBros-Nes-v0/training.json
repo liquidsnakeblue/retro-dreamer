@@ -1,0 +1,32 @@
+{
+  "reward": {
+    "variables": {
+      "score": {
+        "reward": 0.001,
+        "delta": "signed"
+      },
+      "time": {
+        "penalty": 0.01,
+        "delta": "signed"
+      },
+      "xscrollLo": {
+        "reward": 0.1,
+        "delta": "signed",
+        "wrap": 256,
+        "max_delta": 100
+      },
+      "lives": {
+        "penalty": 50,
+        "delta": "signed"
+      }
+    }
+  },
+  "done": {
+    "variables": {
+      "lives": {
+        "op": "equal",
+        "reference": 0
+      }
+    }
+  }
+}

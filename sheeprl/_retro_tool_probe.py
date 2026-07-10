@@ -105,7 +105,9 @@ for state in states_csv.split(","):
                 done_vars = training.get("done", {}).get("variables", {})
                 fired = []
                 for dv, dcfg in done_vars.items():
-                    v, ref, op = cur.get(dv), dcfg.get("reference"), dcfg.get("op")
+                    from sheeprl.envs.retro_dreamer import OP_ALIASES
+                    v, ref = cur.get(dv), dcfg.get("reference", 0)
+                    op = OP_ALIASES.get(dcfg.get("op"), dcfg.get("op"))
                     if (op == "less-than" and v is not None and v < ref) or (
                         op == "equal" and v == ref) or (op == "greater-than" and v is not None and v > ref):
                         fired.append(dv)

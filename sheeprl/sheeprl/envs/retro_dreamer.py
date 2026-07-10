@@ -21,6 +21,78 @@ if not _IS_STABLE_RETRO_AVAILABLE:
     raise ModuleNotFoundError("stable-retro is required for retro-dreamer")
 
 
+# Comparison ops for done conditions and binary rewards. Accept the obvious
+# symbol aliases — configs are written by humans and copilots.
+OP_ALIASES = {
+    "less-than": "less-than", "<": "less-than", "lt": "less-than",
+    "greater-than": "greater-than", ">": "greater-than", "gt": "greater-than",
+    "equal": "equal", "==": "equal", "=": "equal", "eq": "equal",
+}
+
+_REWARD_MODES = {"binary", "quadratic", "linear", "exponential"}
+_REWARD_VAR_KEYS = {
+    "reward", "penalty", "heal_reward", "delta", "wrap", "max_delta",
+    "mode", "op", "reference", "max_speed", "max_value", "base_reward",
+    "scaling_coefficient", "power", "min_threshold",
+}
+_DONE_VAR_KEYS = {"op", "reference"}
+
+
+def validate_training_config(game_id: str, cfg: dict) -> None:
+    """Reject training.json configs the reward/done engine would silently
+    ignore. Every error message states the fix — these are read by humans
+    and by the copilot."""
+    problems = []
+
+    for name, var in (cfg.get("reward", {}).get("variables", {}) or {}).items():
+        where = f"reward.variables.{name}"
+        unknown = set(var) - _REWARD_VAR_KEYS
+        if unknown:
+            problems.append(
+                f"{where}: unknown key(s) {sorted(unknown)} — recognized keys: "
+                f"{sorted(_REWARD_VAR_KEYS)}. For 'pay per unit gained' use "
+                f'{{"reward": <coeff>}} (+ optional "delta":"signed", "wrap", '
+                f'"max_delta"); for damage use {{"penalty": <coeff>}}.'
+            )
+        mode = var.get("mode")
+        if mode is not None and mode not in _REWARD_MODES:
+            problems.append(
+                f"{where}: unknown mode '{mode}' — valid modes: "
+                f"{sorted(_REWARD_MODES)}. Delta rewards use NO mode key."
+            )
+        if "op" in var and var["op"] not in OP_ALIASES:
+            problems.append(f"{where}: unknown op '{var['op']}' — use one of "
+                            f"{sorted(set(OP_ALIASES.values()))} (or <, >, ==)")
+        if not ({"reward", "penalty"} & set(var)) and mode not in _REWARD_MODES - {"binary"}:
+            problems.append(
+                f"{where}: config has neither 'reward' nor 'penalty' — this "
+                f"variable would never pay anything."
+            )
+
+    for name, var in (cfg.get("done", {}).get("variables", {}) or {}).items():
+        where = f"done.variables.{name}"
+        unknown = set(var) - _DONE_VAR_KEYS
+        if unknown:
+            problems.append(
+                f"{where}: unknown key(s) {sorted(unknown)} — done conditions "
+                f'take exactly {{"op": <op>, "reference": <number>}} '
+                f"('value' is not a key; use 'reference')."
+            )
+        op = var.get("op")
+        if op not in OP_ALIASES:
+            problems.append(
+                f"{where}: op '{op}' not recognized — use one of "
+                f"{sorted(set(OP_ALIASES.values()))} (or <, >, ==)"
+            )
+
+    if problems:
+        raise ValueError(
+            f"training.json for {game_id} has schema errors (the engine would "
+            f"silently ignore these — fix them before training):\n  - "
+            + "\n  - ".join(problems)
+        )
+
+
 class RetroDreamerWrapper(gym.Wrapper):
     """Game-agnostic retro wrapper for DreamerV3 / SheepRL.
 
@@ -85,6 +157,10 @@ class RetroDreamerWrapper(gym.Wrapper):
                 self.training_config = json.load(f)
         else:
             self.training_config = {}
+        # Unknown keys silently pay zero reward / never fire done — a config
+        # written against an imagined schema must die HERE, not after hours
+        # of zero-signal training.
+        validate_training_config(game_id, self.training_config)
 
         # Load actions config — our extension
         actions_path = self.game_dir / "actions.json"
@@ -313,11 +389,12 @@ class RetroDreamerWrapper(gym.Wrapper):
             if mode == "binary" and "op" in var_cfg and "reward" in var_cfg:
                 ref = var_cfg.get("reference", 0)
                 val = info[var_name]
-                if var_cfg["op"] == "greater-than" and val > ref:
+                op = OP_ALIASES.get(var_cfg["op"], var_cfg["op"])
+                if op == "greater-than" and val > ref:
                     reward += var_cfg["reward"]
-                elif var_cfg["op"] == "less-than" and val < ref:
+                elif op == "less-than" and val < ref:
                     reward += var_cfg["reward"]
-                elif var_cfg["op"] == "equal" and val == ref:
+                elif op == "equal" and val == ref:
                     reward += var_cfg["reward"]
 
             elif mode == "quadratic":
@@ -358,7 +435,7 @@ class RetroDreamerWrapper(gym.Wrapper):
         for var_name, var_cfg in done_config.items():
             if var_name not in info:
                 continue
-            op = var_cfg.get("op")
+            op = OP_ALIASES.get(var_cfg.get("op"), var_cfg.get("op"))
             ref = var_cfg.get("reference", 0)
             val = info[var_name]
             if op == "less-than" and val < ref:
