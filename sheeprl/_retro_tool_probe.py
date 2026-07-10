@@ -75,10 +75,17 @@ def expected_reward(prev, cur, step):
 
 
 results = []
+printed_actions = False
 for state in states_csv.split(","):
     env = RetroDreamerWrapper(
         game_id=game_id, game_dir=game_dir, initial_state=state, frame_skip=4
     )
+    if not printed_actions:
+        # What each action REALLY presses (resolved against the live core) —
+        # a mislabeled action map should be visible in every probe output.
+        print("ACTIONS: " + " | ".join(
+            f"{i}:{lbl}" for i, lbl in enumerate(env.action_labels)), flush=True)
+        printed_actions = True
     n_actions = env.action_space.n
     action_list = list(range(n_actions)) if actions_arg == "all" else [int(a) for a in actions_arg.split(",")]
     for a in action_list:

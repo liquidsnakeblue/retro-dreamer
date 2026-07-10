@@ -142,31 +142,41 @@ the game; discover with ram_capture + ram_diff or inherit from a promote.
 
 ## actions.json schema (the AI's action menu)
 
+Buttons are written by NAME. Never write 0/1 index arrays — the engine
+rejects files that press nonexistent buttons or duplicate another action,
+and names make both impossible.
+
 ```json
 {
   "actions": [
-    {"name": "NoOp",       "buttons": [0,0,0,0,0,0,0,0,0]},
-    {"name": "Fire",       "buttons": [1,0,0,0,0,0,0,0,0]},
-    {"name": "Fire+Right", "buttons": [1,0,0,0,0,0,0,1,0]}
+    {"name": "NoOp",       "buttons": []},
+    {"name": "Fire",       "buttons": ["B"]},
+    {"name": "Fire+Right", "buttons": ["B", "RIGHT"]},
+    {"name": "RunJump-Right", "buttons": ["RIGHT", "A", "B"]}
   ]
 }
 ```
 
-- Each `buttons` array indexes into the game's TRUE button layout — read it
-  from metadata.json `button_layout`, and make every array EXACTLY that
-  length. The engine rejects longer arrays and zero-pads shorter ones.
-- TRUE layouts (from the emulator cores — trust these, not memory):
-  - Nes / GameBoy / GbColor (9): B, (unused), Select, Start, Up, Down, Left, Right, A
-  - Snes (12): B, Y, Select, Start, Up, Down, Left, Right, A, X, L, R
-  - Genesis / 32x / Scd / Saturn (12): B, A, Mode, Start, Up, Down, Left, Right, C, Y, X, Z
-  - GbAdvance (12): B, (unused), Select, Start, Up, Down, Left, Right, A, (unused), L, R
-  - Atari2600 (8): Button, (unused), Select, Reset, Up, Down, Left, Right
-  - PCEngine (12): II, III, Select, Run, Up, Down, Left, Right, I, IV, V, VI
-  - NOTE the NES gotcha: index 1 is an unused hole and A lives at index 8.
-    Up=4, Down=5, Left=6, Right=7 on every system.
+- Valid button names per system (from the emulator cores — trust these, not
+  memory; names are case-insensitive):
+  - Nes / GameBoy / GbColor: B, SELECT, START, UP, DOWN, LEFT, RIGHT, A
+  - Snes: B, Y, SELECT, START, UP, DOWN, LEFT, RIGHT, A, X, L, R
+  - Genesis / 32x / Scd / Saturn: B, A, MODE, START, UP, DOWN, LEFT, RIGHT, C, Y, X, Z
+  - GbAdvance: B, SELECT, START, UP, DOWN, LEFT, RIGHT, A, L, R
+  - Atari2600: BUTTON, SELECT, RESET, UP, DOWN, LEFT, RIGHT
+  - PCEngine: II, III, SELECT, RUN, UP, DOWN, LEFT, RIGHT, I, IV, V, VI
+- A name not in the system's list is a write-time error and the error
+  message lists the valid names — fix and re-write.
+- Know what each button DOES in this game before building combos (NES: A is
+  usually jump, B is usually run/fire — but verify per game, e.g. with a
+  probe: an action that never changes any RAM variable is probably dead).
 - 4-12 actions. Combos a human would HOLD (run+jump, fire+direction) belong;
-  menu buttons (Start/Select) stay OUT of the action space.
-- Include NoOp as action 0.
+  menu buttons (Start/Select) stay OUT of the action space. Include every
+  button the game NEEDS to be played — an agent without the jump button can
+  never learn to jump.
+- Include NoOp (empty buttons list) as action 0.
+- The reward probe prints an `ACTIONS:` line showing what every action
+  really presses — read it and check it matches your intent.
 
 ## training.json schema (EXACT — the engine rejects unknown keys)
 
@@ -228,8 +238,8 @@ the game; discover with ram_capture + ram_diff or inherit from a promote.
 ```
 
 `default_state` must be a state that boots into LIVE GAMEPLAY (not a menu or
-intro). `button_layout` is written by promote/import — treat it as the truth
-for actions.json array length and ordering.
+intro). `button_layout` is written by promote/import and is display-only —
+actions.json uses button NAMES, so you never index into this list.
 
 ## The tool layer — your hands
 
@@ -328,8 +338,11 @@ Probes take 1-3 minutes; captures and walkers longer.
    score reads as garbage or jumps weirdly, the type is wrong.
 7. done conditions must be REACHABLE. lives==0 never fires if the state
    starts with 99 lives and probes run 200 steps. Check `never_done`.
-8. Actions arrays sized to the wrong layout press the WRONG buttons. Read
-   button_layout from metadata.json every time; NES has 9 slots, not 8.
+8. Write action buttons by NAME (["RIGHT","A"]) — never 0/1 index arrays.
+   A missing capability is invisible to training: an action set without the
+   jump button trains a Mario that converges to walking into the first
+   goomba forever. List what the game NEEDS (jump? run? fire?) and check
+   every needed button appears in at least one action.
 9. The stock scenario.json reward is IGNORED by training — training.json is
    the single source of truth. Don't tune scenario.json expecting effects.
 10. Don't trust filesystem mtimes or your memory of "the newest checkpoint" —
@@ -363,12 +376,13 @@ Onboarding a new game (in this exact order):
    Builtin + rom_ready -> POST promote. Builtin without ROM -> STOP, ask the
    human for the ROM file. Brand new -> /api/games/import (human supplies
    ROM through the UI).
-2. Read all four configs via the API. Read metadata.json button_layout.
+2. Read all four configs via the API.
 3. Verify/extend RAM variables in data.json (promoted games come pre-seeded
    — verify, don't re-discover; new games: ram_capture with random actions,
    mark events, ram_diff, verify candidates, adopt).
-4. Write actions.json against the true button layout (movement + primary
-   button combos; NoOp first; no Start/Select).
+4. Write actions.json with button NAMES (movement + primary button combos;
+   NoOp first; no Start/Select; every button the game NEEDS in at least one
+   action — a platformer without its jump button can never win).
 5. Ensure a LIVE-GAMEPLAY save state exists (build_state if needed; verify
    its screenshots).
 6. Write training.json: progress delta + damage/death penalty is the proven

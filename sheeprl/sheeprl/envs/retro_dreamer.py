@@ -21,76 +21,14 @@ if not _IS_STABLE_RETRO_AVAILABLE:
     raise ModuleNotFoundError("stable-retro is required for retro-dreamer")
 
 
-# Comparison ops for done conditions and binary rewards. Accept the obvious
-# symbol aliases — configs are written by humans and copilots.
-OP_ALIASES = {
-    "less-than": "less-than", "<": "less-than", "lt": "less-than",
-    "greater-than": "greater-than", ">": "greater-than", "gt": "greater-than",
-    "equal": "equal", "==": "equal", "=": "equal", "eq": "equal",
-}
-
-_REWARD_MODES = {"binary", "quadratic", "linear", "exponential"}
-_REWARD_VAR_KEYS = {
-    "reward", "penalty", "heal_reward", "delta", "wrap", "max_delta",
-    "mode", "op", "reference", "max_speed", "max_value", "base_reward",
-    "scaling_coefficient", "power", "min_threshold",
-}
-_DONE_VAR_KEYS = {"op", "reference"}
-
-
-def validate_training_config(game_id: str, cfg: dict) -> None:
-    """Reject training.json configs the reward/done engine would silently
-    ignore. Every error message states the fix — these are read by humans
-    and by the copilot."""
-    problems = []
-
-    for name, var in (cfg.get("reward", {}).get("variables", {}) or {}).items():
-        where = f"reward.variables.{name}"
-        unknown = set(var) - _REWARD_VAR_KEYS
-        if unknown:
-            problems.append(
-                f"{where}: unknown key(s) {sorted(unknown)} — recognized keys: "
-                f"{sorted(_REWARD_VAR_KEYS)}. For 'pay per unit gained' use "
-                f'{{"reward": <coeff>}} (+ optional "delta":"signed", "wrap", '
-                f'"max_delta"); for damage use {{"penalty": <coeff>}}.'
-            )
-        mode = var.get("mode")
-        if mode is not None and mode not in _REWARD_MODES:
-            problems.append(
-                f"{where}: unknown mode '{mode}' — valid modes: "
-                f"{sorted(_REWARD_MODES)}. Delta rewards use NO mode key."
-            )
-        if "op" in var and var["op"] not in OP_ALIASES:
-            problems.append(f"{where}: unknown op '{var['op']}' — use one of "
-                            f"{sorted(set(OP_ALIASES.values()))} (or <, >, ==)")
-        if not ({"reward", "penalty"} & set(var)) and mode not in _REWARD_MODES - {"binary"}:
-            problems.append(
-                f"{where}: config has neither 'reward' nor 'penalty' — this "
-                f"variable would never pay anything."
-            )
-
-    for name, var in (cfg.get("done", {}).get("variables", {}) or {}).items():
-        where = f"done.variables.{name}"
-        unknown = set(var) - _DONE_VAR_KEYS
-        if unknown:
-            problems.append(
-                f"{where}: unknown key(s) {sorted(unknown)} — done conditions "
-                f'take exactly {{"op": <op>, "reference": <number>}} '
-                f"('value' is not a key; use 'reference')."
-            )
-        op = var.get("op")
-        if op not in OP_ALIASES:
-            problems.append(
-                f"{where}: op '{op}' not recognized — use one of "
-                f"{sorted(set(OP_ALIASES.values()))} (or <, >, ==)"
-            )
-
-    if problems:
-        raise ValueError(
-            f"training.json for {game_id} has schema errors (the engine would "
-            f"silently ignore these — fix them before training):\n  - "
-            + "\n  - ".join(problems)
-        )
+# Config validation lives in config_validation.py (dependency-free so the
+# backend server can also load it by file path at API write time). Re-export
+# here — the probe and older callers import these names from this module.
+from sheeprl.envs.config_validation import (  # noqa: F401
+    OP_ALIASES,
+    resolve_action_mappings,
+    validate_training_config,
+)
 
 
 class RetroDreamerWrapper(gym.Wrapper):
@@ -162,15 +100,16 @@ class RetroDreamerWrapper(gym.Wrapper):
         # of zero-signal training.
         validate_training_config(game_id, self.training_config)
 
-        # Load actions config — our extension
+        # Load actions config — our extension. Rows are compiled and
+        # validated against the live core's button list after env creation.
         actions_path = self.game_dir / "actions.json"
         if actions_path.exists():
             with open(actions_path) as f:
                 actions_data = json.load(f)
-                self.action_mappings = [a["buttons"] for a in actions_data["actions"]]
+            self._action_defs = actions_data["actions"]
         else:
             # Fallback: use retro's FILTERED actions (let retro decide)
-            self.action_mappings = None  # handled below after env creation
+            self._action_defs = None  # handled below after env creation
 
         # Determine state; preload raw bytes for every rotation entry so
         # reset() can swap tracks without touching retro's path resolution
@@ -193,7 +132,7 @@ class RetroDreamerWrapper(gym.Wrapper):
                 state = str(state_file)
 
         # Create retro environment
-        use_restricted = retro.Actions.ALL if self.action_mappings else retro.Actions.FILTERED
+        use_restricted = retro.Actions.ALL if self._action_defs else retro.Actions.FILTERED
         self._env = retro.make(
             game=game_id,
             state=state,
@@ -202,29 +141,27 @@ class RetroDreamerWrapper(gym.Wrapper):
             render_mode=render_mode,
         )
 
-        # If no actions.json, derive action mappings from env's MultiBinary space
-        if self.action_mappings is None:
-            n_buttons = self._env.action_space.shape[0] if hasattr(self._env.action_space, 'shape') else 12
-            # Default: individual buttons + no-op
-            self.action_mappings = [[0] * n_buttons]  # no-op
-            for i in range(n_buttons):
+        # Ground truth for validation: the loaded core's own button list,
+        # padded to the emulator's action row width.
+        n_buttons = self._env.action_space.shape[0]
+        env_buttons = list(self._env.buttons)
+        env_buttons += [None] * (n_buttons - len(env_buttons))
+
+        if self._action_defs is None:
+            # No actions.json: one action per REAL button + no-op (holes skipped)
+            self.action_mappings = [[0] * n_buttons]
+            self.action_labels = ["NoOp"]
+            for i, b in enumerate(env_buttons):
+                if not b:
+                    continue
                 row = [0] * n_buttons
                 row[i] = 1
                 self.action_mappings.append(row)
+                self.action_labels.append(b)
         else:
-            # Normalize actions.json rows against the REAL button count: pad
-            # short rows with zeros (silently correct), reject long rows (a
-            # long row would press the wrong buttons — never train on that).
-            n_buttons = self._env.action_space.shape[0]
-            for idx, row in enumerate(self.action_mappings):
-                if len(row) > n_buttons:
-                    raise ValueError(
-                        f"actions.json action {idx} has {len(row)} buttons but "
-                        f"{game_id} exposes {n_buttons} ({self._env.buttons}) — "
-                        f"fix actions.json against the true layout"
-                    )
-                if len(row) < n_buttons:
-                    self.action_mappings[idx] = list(row) + [0] * (n_buttons - len(row))
+            self.action_mappings, self.action_labels = resolve_action_mappings(
+                self._action_defs, env_buttons, game_id
+            )
 
         super().__init__(self._env)
 

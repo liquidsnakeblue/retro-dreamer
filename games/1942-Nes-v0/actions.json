@@ -2,86 +2,40 @@
   "actions": [
     {
       "name": "NoOp",
-      "buttons": [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ]
+      "buttons": []
     },
     {
       "name": "Fire",
       "buttons": [
-        1,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
+        "B"
       ]
     },
     {
       "name": "Fire+Up",
       "buttons": [
-        1,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        0,
-        0
+        "B",
+        "UP"
       ]
     },
     {
       "name": "Fire+Down",
       "buttons": [
-        1,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        0
+        "B",
+        "DOWN"
       ]
     },
     {
       "name": "Fire+Left",
       "buttons": [
-        1,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0
+        "B",
+        "LEFT"
       ]
     },
     {
       "name": "Fire+Right",
       "buttons": [
-        1,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0
+        "B",
+        "RIGHT"
       ]
     }
   ]

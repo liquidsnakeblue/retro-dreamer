@@ -36,6 +36,29 @@ _SYSTEM_BUTTONS = {
 }
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_config_validation_mod = None
+
+
+def _config_validation():
+    """Load the shared config validators by FILE PATH.
+
+    A plain `import sheeprl...` breaks in the server process: it runs from
+    the repo root, where the outer ./sheeprl directory shadows the editable-
+    installed package as a namespace package. The module is dependency-free,
+    so loading its file directly sidesteps package resolution entirely.
+    """
+    global _config_validation_mod
+    if _config_validation_mod is None:
+        import importlib.util
+        path = _PROJECT_ROOT / "sheeprl" / "sheeprl" / "envs" / "config_validation.py"
+        spec = importlib.util.spec_from_file_location("_rd_config_validation", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _config_validation_mod = mod
+    return _config_validation_mod
+
+
 def _base_game_id(game_id: str) -> str:
     """Strip the integration version suffix built-in ids carry: '1942-Nes-v0' -> '1942-Nes'."""
     return re.sub(r"-v\d+$", "", game_id)
@@ -264,18 +287,43 @@ class GameManager:
         if filename == "training.json":
             return {"reward": {"variables": {}}, "done": {"variables": {}}}
         if filename == "actions.json":
-            system = _system_from_game_id(game_id)
-            buttons = _buttons_for_system(system)
-            # Default: one no-op action
-            return {"actions": [{"name": "NoOp", "buttons": [0] * len(buttons)}]}
+            # Default: one no-op action (buttons are authored by NAME)
+            return {"actions": [{"name": "NoOp", "buttons": []}]}
 
         raise FileNotFoundError(f"Config '{filename}' not found for game '{game_id}'")
 
     def write_config(self, game_id: str, filename: str, data: dict):
-        """Write config — always writes to custom games dir (never modifies built-in)."""
+        """Write config — always writes to custom games dir (never modifies built-in).
+
+        actions.json and training.json are validated HERE, at write time, so
+        a broken config bounces back to the author (human or copilot) with a
+        fix-it message instead of silently training a dead agent.
+        """
         self._validate_filename(filename)
         if not isinstance(data, dict):
             raise ValueError(f"Config data must be a dict, got {type(data).__name__}")
+
+        if filename == "actions.json":
+            # Workspace metadata is authoritative for system (ids like
+            # 'FZero-Test' don't encode one); fall back to id parsing.
+            system = _system_from_game_id(game_id)
+            meta_path = self.games_dir / game_id / "metadata.json"
+            if meta_path.exists():
+                try:
+                    system = json.loads(meta_path.read_text()).get("system") or system
+                except Exception:
+                    pass
+            buttons = _buttons_for_system(system)
+            if not buttons:
+                raise ValueError(
+                    f"Can't validate actions for '{game_id}': unknown system "
+                    f"'{system}' — game_id must end in -<System>-v<N> (e.g. -Nes-v0)"
+                )
+            _config_validation().resolve_action_mappings(
+                data.get("actions", []), buttons, game_id
+            )
+        elif filename == "training.json":
+            _config_validation().validate_training_config(game_id, data)
 
         game_dir = self.games_dir / game_id
         game_dir.mkdir(parents=True, exist_ok=True)
@@ -339,15 +387,14 @@ class GameManager:
                 {"reward": {"variables": {}}, "done": {"variables": {}}}, indent=2
             ) + "\n")
 
-        # Create actions.json with default all-buttons-as-individual-actions
+        # Create actions.json with default per-button actions (authored by
+        # NAME — index arrays are a retired format that let holes/mislabels
+        # slip through)
         if not (game_dir / "actions.json").exists():
-            actions = [{"name": "NoOp", "buttons": [0] * len(buttons)}]
-            # Add one action per directional button
-            for i, btn in enumerate(buttons):
+            actions = [{"name": "NoOp", "buttons": []}]
+            for btn in buttons:
                 if btn in ("Up", "Down", "Left", "Right", "B", "A"):
-                    row = [0] * len(buttons)
-                    row[i] = 1
-                    actions.append({"name": btn, "buttons": row})
+                    actions.append({"name": btn, "buttons": [btn]})
             (game_dir / "actions.json").write_text(json.dumps(
                 {"actions": actions}, indent=2
             ) + "\n")
@@ -382,7 +429,7 @@ class GameManager:
             "reward": {"variables": {}}, "done": {"variables": {}}
         }, indent=2) + "\n")
         (game_dir / "actions.json").write_text(json.dumps({
-            "actions": [{"name": "NoOp", "buttons": [0] * len(buttons)}]
+            "actions": [{"name": "NoOp", "buttons": []}]
         }, indent=2) + "\n")
 
         print(f"[GameManager] Created game scaffold at {game_dir}")
@@ -441,7 +488,7 @@ class GameManager:
             "reward": {"variables": {}}, "done": {"variables": {}}
         }, indent=2) + "\n")
         (game_dir / "actions.json").write_text(json.dumps({
-            "actions": [{"name": "NoOp", "buttons": [0] * len(buttons)}]
+            "actions": [{"name": "NoOp", "buttons": []}]
         }, indent=2) + "\n")
 
         ram_vars = []

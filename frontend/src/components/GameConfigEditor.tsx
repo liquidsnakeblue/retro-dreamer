@@ -72,16 +72,26 @@ function ActionsEditor({ gameId, buttons }: ActionsEditorProps) {
       const res = await fetch(`${API}/games/${encodeURIComponent(gameId)}/config/actions.json`)
       if (res.ok) {
         const raw = await res.json()
-        // Support both formats: {actions: [{name, buttons}]} and flat array
         const actionsArray = raw.actions || raw
-        setActions(
-          actionsArray.map((item: any, i: number) => {
-            if (item.buttons !== undefined) {
-              return { name: item.name || `Action ${i}`, buttons: item.buttons.map(Boolean) }
+        // Canonical format is button NAMES (["RIGHT","A"]); legacy 0/1 index
+        // arrays still render. Internal state is a boolean row per layout slot.
+        const toRow = (spec: any[]): boolean[] => {
+          const row: boolean[] = Array(buttons.length).fill(false)
+          if (spec.every((b: any) => typeof b === 'string')) {
+            for (const name of spec) {
+              const i = buttons.findIndex(b => b && b.toUpperCase() === String(name).toUpperCase())
+              if (i >= 0) row[i] = true
             }
-            // Flat array format
-            return { name: `Action ${i}`, buttons: (item as number[]).map(Boolean) }
-          })
+          } else {
+            spec.forEach((v: any, i: number) => { if (v && i < row.length) row[i] = true })
+          }
+          return row
+        }
+        setActions(
+          actionsArray.map((item: any, i: number) => ({
+            name: item.name || `Action ${i}`,
+            buttons: toRow(item.buttons !== undefined ? item.buttons : (item as any[])),
+          }))
         )
       } else {
         setSaveError(`Failed to load actions.json: ${res.status}`)
@@ -91,7 +101,7 @@ function ActionsEditor({ gameId, buttons }: ActionsEditorProps) {
     } finally {
       setLoading(false)
     }
-  }, [gameId])
+  }, [gameId, buttons])
 
   useEffect(() => { load() }, [load])
 
@@ -128,10 +138,13 @@ function ActionsEditor({ gameId, buttons }: ActionsEditorProps) {
     setSaveError('')
     setSaveOk(false)
     try {
+      // Save as button NAMES — the only format the server accepts without
+      // legacy-array validation caveats; holes can't be expressed at all.
       const payload = {
         actions: actions.map(a => ({
           name: a.name,
-          buttons: a.buttons.map(b => b ? 1 : 0),
+          buttons: a.buttons.flatMap((checked, i) =>
+            checked && buttons[i] ? [buttons[i].toUpperCase()] : []),
         }))
       }
       const res = await fetch(`${API}/games/${encodeURIComponent(gameId)}/config/actions.json`, {
@@ -197,14 +210,14 @@ function ActionsEditor({ gameId, buttons }: ActionsEditorProps) {
               <tr>
                 <th className="text-left px-3 py-2 text-retro-text-dim font-semibold border-b border-retro-border w-8">#</th>
                 <th className="text-left px-3 py-2 text-retro-text-dim font-semibold border-b border-retro-border min-w-[120px]">Name</th>
-                {buttons.map(btn => (
+                {buttons.map((btn, btnIdx) => btn ? (
                   <th
-                    key={btn}
+                    key={btnIdx}
                     className="px-2 py-2 text-retro-text-dim font-semibold border-b border-retro-border text-center min-w-[40px] font-mono"
                   >
                     {btn}
                   </th>
-                ))}
+                ) : null)}
                 <th className="px-2 py-2 border-b border-retro-border w-10" />
               </tr>
             </thead>
@@ -224,9 +237,10 @@ function ActionsEditor({ gameId, buttons }: ActionsEditorProps) {
                     />
                   </td>
                   {buttons.map((btn, btnIdx) => {
+                    if (!btn) return null
                     const checked = action.buttons[btnIdx] ?? false
                     return (
-                      <td key={btn} className="px-2 py-1.5 text-center">
+                      <td key={btnIdx} className="px-2 py-1.5 text-center">
                         <input
                           type="checkbox"
                           checked={checked}
