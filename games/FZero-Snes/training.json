@@ -1,10 +1,12 @@
 {
   "reward": {
+    "warmup_steps": 10,
     "variables": {
       "pos": {
         "reward": 10.0,
         "delta": "signed",
-        "wrap": 65536
+        "wrap": 65536,
+        "max_delta": 300
       },
       "health": {
         "penalty": 1.0

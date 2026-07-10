@@ -191,6 +191,14 @@ class RetroDreamerWrapper(gym.Wrapper):
         # against a prev_info that only advances below would also overcount
         # deltas (d+2d+3d+4d = 10d over a 4-frame skip instead of 4d).
         total_reward = self._calculate_reward(info)
+        # Spawn artifact suppression: F-Zero's track-position counter parks
+        # ~198 units before the line and SNAPS forward when first crossed
+        # (~step 6), paying a large unearned lump for merely existing.
+        # Zeroing shaping for a short warmup kills exactly that; identical
+        # snaps at LAP crossings later in the episode are real completion
+        # signal and stay.
+        if self.episode_step < self.training_config.get("reward", {}).get("warmup_steps", 0):
+            total_reward = 0.0
 
         processed_obs = self._process_observation(obs)
 
@@ -229,6 +237,12 @@ class RetroDreamerWrapper(gym.Wrapper):
                     wrap = var_cfg.get("wrap")
                     if wrap:
                         delta = (delta + wrap // 2) % wrap - wrap // 2
+                    # Bound single-step deltas: legit values are tiny (0-1
+                    # per step racing, ~198 lap-line snaps) — anything huge
+                    # is a teleport/glitch, not progress.
+                    cap = var_cfg.get("max_delta")
+                    if cap:
+                        delta = max(-cap, min(cap, delta))
                     if var_cfg.get("delta") == "signed":
                         gain = delta
                     else:

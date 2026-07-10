@@ -63,19 +63,17 @@ async def start_training(req: TrainingStartRequest):
         config.initial_state = req.initial_state
         config.env_state = req.initial_state
     elif _game_manager is not None:
-        # Fall back to the game's declared default_state (metadata.json was
-        # previously never consulted; the hardcoded "go" default only happens
-        # to be right for F-Zero)
+        # Fall back to the game's declared default_state (previously never
+        # consulted; the hardcoded "go" default only happens to be right for
+        # F-Zero). get_game() covers custom games (metadata.json) AND
+        # built-in stable-retro games (their first shipped state).
         try:
-            import json as _json
-            meta_path = _game_manager.games_dir / config.game_id / "metadata.json"
-            if meta_path.exists():
-                default_state = _json.loads(meta_path.read_text()).get("default_state")
-                if default_state:
-                    config.initial_state = default_state
-                    config.env_state = default_state
+            default_state = (_game_manager.get_game(config.game_id) or {}).get("default_state")
+            if default_state:
+                config.initial_state = default_state
+                config.env_state = default_state
         except Exception as exc:
-            print(f"[API] metadata default_state lookup failed: {exc}")
+            print(f"[API] default_state lookup failed: {exc}")
 
     # Override numeric hyperparams if provided
     if req.batch_size is not None:

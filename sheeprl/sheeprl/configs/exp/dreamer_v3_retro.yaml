@@ -21,6 +21,11 @@ env:
   capture_video: True
   video_freq: 5000
 
+# NOTE: the dashboard launcher (backend/training/trainer.py) stamps
+# checkpoint.every, metric.log_every, and env.video_freq via CLI on every
+# start (currently 1000 / 100 / 10). The values below apply only to manual
+# `sheeprl` launches without those overrides.
+
 # Checkpoint
 checkpoint:
   every: 10000
@@ -53,10 +58,8 @@ algo:
   critic:
     cls: sheeprl.algos.dreamer_v3.agent.Critic
 
-# Optimization
-optim:
-  lr: 3e-4
-  eps: 1e-8
+# (A root-level `optim:` block used to live here — dead config: dreamer_v3
+# instantiates per-component optimizers from algo.world_model/actor/critic.)
 
 # Metric
 metric:

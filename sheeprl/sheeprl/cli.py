@@ -36,7 +36,10 @@ def resume_from_checkpoint(cfg: DictConfig) -> DictConfig:
             f"Got '{cfg.algo.name}', but the algorithm of the experiment of the checkpoint was {old_cfg.algo.name}. "
             "Set properly the algorithm name for restarting the experiment."
         )
-    if old_cfg.algo.learning_starts > 0:
+    # learning_starts is whitelisted below, so the NEW composition's value is
+    # what will apply — warn on that, not the old run's (which used to fire a
+    # false warning even when the new launch explicitly set 0).
+    if cfg.algo.learning_starts > 0:
         warnings.warn(
             "The `algo.learning_starts` parameter is greater than zero. "
             "This means that the resuming experiment will pre-fill the buffer for `algo.learning_starts` steps. "
@@ -77,6 +80,41 @@ def resume_from_checkpoint(cfg: DictConfig) -> DictConfig:
     if "metric" in old_cfg:
         old_cfg.metric.pop("log_every", None)
     old_cfg.env.pop("video_freq", None)
+
+    # Settings that CANNOT change on resume (architecture is baked into the
+    # weights; the restored buffer is shaped per-env; frame timing changes
+    # the meaning of stored transitions). They keep the old run's values —
+    # but say so LOUDLY when the new launch asked for something else, instead
+    # of silently reverting (the original audit's bug class).
+    def _dig(cfg_dict, dotted):
+        cur = cfg_dict
+        for part in dotted.split("."):
+            if not isinstance(cur, (dict, DictConfig)) or part not in cur:
+                return None
+            cur = cur[part]
+        return cur
+
+    locked_keys = [
+        "env.num_envs",
+        "env.sync_env",
+        "env.frame_skip",
+        "env.max_episode_steps",
+        "buffer.size",
+        "algo.dense_units",
+        "algo.world_model.recurrent_model.recurrent_state_size",
+        "algo.world_model.encoder.cnn_channels_multiplier",
+        "algo.world_model.optimizer.lr",
+        "algo.actor.optimizer.lr",
+        "algo.critic.optimizer.lr",
+    ]
+    for key in locked_keys:
+        new_val, old_val = _dig(cfg, key), _dig(old_cfg, key)
+        if new_val is not None and old_val is not None and new_val != old_val:
+            warnings.warn(
+                f"Resume keeps the checkpoint's `{key}`={old_val!r}; the requested "
+                f"{new_val!r} is IGNORED (not changeable on resume — start a fresh "
+                "run to change it)."
+            )
     # Substitute the config with the old one (except for the parameters removed before)
     # because the experiment must continue with the same parameters
     with open_dict(cfg):
