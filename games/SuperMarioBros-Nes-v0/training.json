@@ -6,14 +6,13 @@
         "delta": "signed"
       },
       "time": {
-        "penalty": 0.01,
-        "delta": "signed"
+        "penalty": 0.01
       },
-      "xscrollLo": {
+      "playerX": {
         "reward": 0.1,
         "delta": "signed",
         "wrap": 256,
-        "max_delta": 100
+        "max_delta": 16
       },
       "lives": {
         "penalty": 50,
