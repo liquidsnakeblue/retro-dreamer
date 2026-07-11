@@ -9,6 +9,7 @@ Our dashboard observes and controls the process.
 
 import json
 import os
+import shutil
 import sys
 import time
 import subprocess
@@ -174,6 +175,15 @@ class DreamerV3Trainer:
             game_id=self.config.game_id,
         )
 
+    @staticmethod
+    def _action_count(game_dir: str) -> Optional[int]:
+        """Discrete action count from the workspace actions.json (None if absent)."""
+        path = Path(game_dir) / "actions.json"
+        try:
+            return len(json.loads(path.read_text())["actions"])
+        except Exception:
+            return None
+
     def start(self, config: Optional[TrainingConfig] = None, fresh_start: bool = False):
         """Launch SheepRL training as a subprocess."""
         if self.state == TrainingState.TRAINING:
@@ -315,10 +325,9 @@ class DreamerV3Trainer:
         # fresh; a restored buffer keeps its own paths). New lineages never
         # write replay inside run dirs.
         replay_dir = STATE_DIR / "games" / game_id / "lineages" / "main" / "replay"
-        replay_dir.mkdir(parents=True, exist_ok=True)
-        cmd.append(f"buffer.memmap_dir={replay_dir}")
 
         # Resume from checkpoint if not a fresh start
+        resume_ckpt = None
         if self._fresh_start:
             print("[Trainer] Fresh start — skipping checkpoint resume")
         else:
@@ -341,6 +350,34 @@ class DreamerV3Trainer:
                     cmd.append("algo.learning_starts=0")
                     print(f"[Trainer] Resuming from: {resume_ckpt}")
 
+        # Replay-buffer hygiene. SheepRL memmaps raw .memmap files with
+        # whatever shapes THIS run assumes — no metadata on disk. A fresh
+        # buffer created over a stale dir whose arrays were written with a
+        # different action count mmaps garbage and has hard-killed the whole
+        # WSL VM (2026-07-10: two instant crashes; same command over a clean
+        # dir trains fine). Rule: buffer built fresh → wipe the dir first;
+        # buffer restored → verify shapes via our meta file.
+        buffer_restored = resume_ckpt is not None and cfg.resume_prefill == 0
+        buffer_meta_path = replay_dir.parent / "buffer-meta.json"
+        current_meta = {"num_envs": cfg.num_envs,
+                        "action_count": self._action_count(abs_game_dir)}
+        if not buffer_restored:
+            if replay_dir.exists():
+                print(f"[Trainer] Wiping stale replay buffer: {replay_dir}")
+                shutil.rmtree(replay_dir)
+        elif buffer_meta_path.exists():
+            saved_meta = json.loads(buffer_meta_path.read_text())
+            if saved_meta != current_meta:
+                raise ValueError(
+                    f"Replay buffer at {replay_dir} was written with "
+                    f"{saved_meta}, but this run is {current_meta} — resuming "
+                    f"would corrupt the buffer (actions.json or num_envs "
+                    f"changed since). Start fresh, or restore the old config."
+                )
+        replay_dir.mkdir(parents=True, exist_ok=True)
+        buffer_meta_path.write_text(json.dumps(current_meta))
+        cmd.append(f"buffer.memmap_dir={replay_dir}")
+
         env = os.environ.copy()
         # Child stdout is a pipe → Python block-buffers it. During long-episode
         # phases output is sparse and sits unflushed for hours, freezing the
@@ -349,10 +386,34 @@ class DreamerV3Trainer:
         env["CUDA_VISIBLE_DEVICES"] = "0"
         env["PYOPENGL_PLATFORM"] = "egl"
         env["PYGLET_HEADLESS"] = "1"
-        # XL runs at 31.1/32.6GB VRAM — allocator fragmentation over multi-hour
-        # runs is the known OOM risk at that headroom; expandable segments
-        # remove the fragmentation failure mode.
-        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        # DO NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True here.
+        # Added 2026-07-10 (a8352b4) for XL fragmentation headroom, it turned
+        # out to be the one env-var difference between backend launches and
+        # bare-CLI launches of the same trainer command: with it, every fresh
+        # L run (4/4) hard-panicked the WSL2 guest VM at the first train
+        # batch; without it, identical CLI runs trained fine. Expandable
+        # segments use CUDA VMM mapping, which on WSL rides the dxg GPU-PV
+        # path — see microsoft/WSL#40732 for the panic-instead-of-clean-OOM
+        # failure class. Fragmentation OOM on multi-hour XL runs is the
+        # accepted tradeoff; the RETRO_CUDA_MEM_FRACTION cap below keeps any
+        # OOM a clean in-process error instead of a VM death.
+        env.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+        # WSL VM-death guard: under WDDM/GPU-PV, allocating past FREE VRAM
+        # (the Windows desktop holds several GB) demand-pages GPU memory
+        # instead of raising OOM, which can hard-kill the whole WSL VM. Cap
+        # the allocator just under what's free so overflow surfaces as a
+        # clean CUDA OOM in the trainer log instead.
+        try:
+            free_mib, total_mib = map(int, subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=memory.free,memory.total",
+                 "--format=csv,noheader,nounits"], timeout=10
+            ).decode().split("\n")[0].split(","))
+            fraction = max(0.1, round((free_mib - 1536) / total_mib, 3))
+            env["RETRO_CUDA_MEM_FRACTION"] = str(fraction)
+            print(f"[Trainer] VRAM guard: {free_mib}MiB free of {total_mib} — "
+                  f"allocator capped at {fraction} of card")
+        except Exception as exc:
+            print(f"[Trainer] VRAM guard skipped (nvidia-smi failed: {exc})")
 
         # Graceful-suspend control channel (studio-v2)
         self._control_dir = STATE_DIR / "control" / f"session-{int(time.time())}"
