@@ -55,6 +55,9 @@ _WRAPPER_SCRIPT = (
     "os.environ.setdefault('PYGLET_HEADLESS', '1')\n"
     "import pyglet; pyglet.options['shadow_window'] = False\n"
     "import torch\n"
+    "_frac = os.environ.get('RETRO_CUDA_MEM_FRACTION')\n"
+    "if _frac and torch.cuda.is_available():\n"
+    "    torch.cuda.set_per_process_memory_fraction(float(_frac), 0)\n"
     "original_load = torch.load\n"
     "def _patched_torch_load(*args, **kwargs):\n"
     "    kwargs['weights_only'] = False\n"
@@ -442,7 +445,9 @@ class DreamerV3Trainer:
         self._log_thread.start()
         # Register the session in the catalog once the run dir materializes
         threading.Thread(
-            target=self._catalog_register_session, args=(game_id, launch_ts), daemon=True
+            target=self._catalog_register_session,
+            args=(game_id, launch_ts, algo.rsplit("_", 1)[1]),
+            daemon=True,
         ).start()
 
     # ------------------------------------------------------------------
@@ -465,7 +470,9 @@ class DreamerV3Trainer:
             print(f"[Trainer] catalog head lookup failed: {exc}")
             return None
 
-    def _catalog_register_session(self, game_id: str, launch_ts: float):
+    def _catalog_register_session(
+        self, game_id: str, launch_ts: float, size_label: str = ""
+    ):
         """Wait for the child's run dir to appear, then record the session."""
         logs = _sheeprl_logs(game_id)
         run_dir = None
@@ -483,6 +490,7 @@ class DreamerV3Trainer:
         if run_dir is None:
             print("[Trainer] catalog: run dir never appeared; session unregistered")
             return
+        self._update_tb_view(game_id, size_label, run_dir)
         try:
             con = _catalog.connect()
             con.execute(
@@ -520,6 +528,25 @@ class DreamerV3Trainer:
             print(f"[Trainer] catalog: session {self._catalog_session_id} = {run_dir}")
         except Exception as exc:
             print(f"[Trainer] catalog session registration failed: {exc}")
+
+    @staticmethod
+    def _update_tb_view(game_id: str, size_label: str, version0_dir: Path):
+        """Maintain the TensorBoard symlink view: logs/tb/<game>/<SIZE>_<stamp>
+        → the run's version_0. Real run dirs keep SheepRL's timestamp naming
+        (resume discovery, the catalog, and the F-Zero buffer symlink all
+        depend on those paths staying put); TensorBoard points at logs/tb
+        instead, where every run is game- and model-tagged so the dashboard
+        regex filter can slice by either. scripts/rebuild_tb_view.py rebuilds
+        the whole view for pre-existing runs."""
+        try:
+            stamp = version0_dir.parent.name[:19]
+            link = SHEEPRL_DIR / "logs" / "tb" / game_id / f"{size_label or 'UNK'}_{stamp}"
+            link.parent.mkdir(parents=True, exist_ok=True)
+            if not link.is_symlink():
+                link.symlink_to(os.path.relpath(version0_dir, link.parent))
+                print(f"[Trainer] tb view: {link.parent.name}/{link.name}")
+        except Exception as exc:
+            print(f"[Trainer] tb view symlink failed: {exc}")
 
     def _catalog_register_snapshot_step(self, step: int):
         if self._catalog_session_id is None or self._session_run_dir is None:
