@@ -31,11 +31,20 @@ router = APIRouter(prefix="/api/tools")
 
 _jobs: dict = {}
 _lock = threading.Lock()
+_report_served_callback = None
+
+
+def set_report_served_callback(callback):
+    """Register a non-blocking observer for completed watch_brain reports."""
+    global _report_served_callback
+    with _lock:
+        _report_served_callback = callback
 
 
 def _run_job(job_id: str, cmd: list, cwd: Path):
-    job = _jobs[job_id]
-    log_path = Path(job["log"])
+    with _lock:
+        job = _jobs[job_id]
+        log_path = Path(job["log"])
     env = os.environ.copy()
     env.setdefault("PYOPENGL_PLATFORM", "egl")
     env.setdefault("PYGLET_HEADLESS", "1")
@@ -48,7 +57,8 @@ def _run_job(job_id: str, cmd: list, cwd: Path):
                 cmd, cwd=str(cwd), env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
             )
-            job["pid"] = proc.pid
+            with _lock:
+                job["pid"] = proc.pid
             result = None
             for line in proc.stdout:
                 logf.write(line)
@@ -80,12 +90,13 @@ def submit(
     job_id = job_id or f"{tool}-{uuid.uuid4().hex[:8]}"
     job_dir = JOBS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
-    _jobs[job_id] = {
-        "id": job_id, "tool": tool, "status": "running",
-        "cmd": [str(c) for c in cmd], "log": str(job_dir / "output.log"),
-        "workdir": str(job_dir), "started_at": time.time(),
-        "result": None,
-    }
+    with _lock:
+        _jobs[job_id] = {
+            "id": job_id, "tool": tool, "status": "running",
+            "cmd": [str(c) for c in cmd], "log": str(job_dir / "output.log"),
+            "workdir": str(job_dir), "started_at": time.time(),
+            "result": None,
+        }
     threading.Thread(target=_run_job, args=(job_id, cmd, cwd), daemon=True).start()
     return job_id
 
@@ -341,18 +352,37 @@ def record_episode(req: RecordReq):
 
 @router.get("/jobs/{job_id}")
 def job_status(job_id: str, log_tail: int = 20):
-    job = _jobs.get(job_id)
-    if not job:
-        raise HTTPException(404, "unknown job")
-    out = dict(job)
+    # The worker publishes terminal status + result under this same lock. Copy
+    # them atomically so a completed response can never miss its report tap.
+    with _lock:
+        job = _jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "unknown job")
+        out = dict(job)
+        callback = _report_served_callback
     try:
-        lines = Path(job["log"]).read_text().splitlines()
+        lines = Path(out["log"]).read_text().splitlines()
         out["log_tail"] = lines[-log_tail:]
     except OSError:
         out["log_tail"] = []
+    result = out.get("result")
+    if (
+        out.get("tool") == "watch_brain"
+        and out.get("status") == "done"
+        and isinstance(result, dict)
+        and isinstance(result.get("report_text"), str)
+        and callback is not None
+    ):
+        try:
+            callback(job_id, result["report_text"])
+        except Exception as exc:
+            # Grounding is observability, never a reason to break the tool API.
+            print(f"[grounding] report tap failed for {job_id}: {exc}")
     return out
 
 
 @router.get("/jobs")
 def jobs_list():
-    return {"jobs": sorted(_jobs.values(), key=lambda j: j["started_at"], reverse=True)}
+    with _lock:
+        jobs = [dict(job) for job in _jobs.values()]
+    return {"jobs": sorted(jobs, key=lambda j: j["started_at"], reverse=True)}

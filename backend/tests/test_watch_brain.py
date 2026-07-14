@@ -125,6 +125,56 @@ class WatchBrainEndpointTest(unittest.TestCase):
         submit.assert_not_called()
 
 
+class JobStatusGroundingTapTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_jobs = tools._jobs
+        self.old_callback = tools._report_served_callback
+        self.log = Path(self.tmp.name) / "output.log"
+        self.log.write_text("done\n")
+        tools._jobs = {}
+
+    def tearDown(self):
+        tools._jobs = self.old_jobs
+        tools.set_report_served_callback(self.old_callback)
+        self.tmp.cleanup()
+
+    def test_completed_watch_report_is_tapped_when_endpoint_serves_it(self):
+        report = "EPISODE REPORT\nEVENT STREAM (0 events)\nPOST-MORTEM:\n"
+        job_id = "watch_brain-deadbeef"
+        tools._jobs[job_id] = {
+            "id": job_id,
+            "tool": "watch_brain",
+            "status": "done",
+            "log": str(self.log),
+            "result": {"report_text": report},
+        }
+        calls = []
+        tools.set_report_served_callback(lambda *args: calls.append(args))
+
+        result = tools.job_status(job_id)
+
+        self.assertEqual([(job_id, report)], calls)
+        self.assertEqual(report, result["result"]["report_text"])
+
+    def test_running_or_non_watch_jobs_do_not_tap_reports(self):
+        calls = []
+        tools.set_report_served_callback(lambda *args: calls.append(args))
+        for job_id, tool, status in (
+            ("watch_brain-deadbeef", "watch_brain", "running"),
+            ("reward_probe-deadbeef", "reward_probe", "done"),
+        ):
+            tools._jobs[job_id] = {
+                "id": job_id,
+                "tool": tool,
+                "status": status,
+                "log": str(self.log),
+                "result": {"report_text": "not served"},
+            }
+            tools.job_status(job_id)
+        self.assertEqual([], calls)
+
+
 class JobManagerCpuPinTest(unittest.TestCase):
     def test_parent_gpu_selection_is_always_cleared(self):
         with tempfile.TemporaryDirectory() as tmp:

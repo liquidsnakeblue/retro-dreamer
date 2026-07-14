@@ -33,8 +33,12 @@ from backend.api.routes import (
     set_studio_state_builder as set_api_state_builder,
     set_training_planner as set_api_training_planner,
 )
-from backend.tools import router as tools_router
+from backend.tools import (
+    router as tools_router,
+    set_report_served_callback,
+)
 from backend.copilot import (
+    cache_served_watch_report,
     router as copilot_router,
     set_studio_state_builder as set_copilot_state_builder,
 )
@@ -106,6 +110,7 @@ async def lifespan(app: FastAPI):
     studio_state_builder = StudioStateBuilder(game_manager, trainer)
     set_api_state_builder(studio_state_builder)
     set_copilot_state_builder(studio_state_builder)
+    set_report_served_callback(cache_served_watch_report)
     training_planner = TrainingPlanner(studio_state_builder)
     set_api_training_planner(training_planner)
 
