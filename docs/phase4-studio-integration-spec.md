@@ -158,6 +158,9 @@ Built by Jim on 2026-07-14. Milestone commits:
 - `7da5e53` — hardened proposal revisions with save-state/head/replay/config identity,
   preflighted `buffer-meta.json` compatibility, preserved successful mutation receipts
   across ambient-read failures, and renewed expired browser approval sessions once.
+- `9fd27e7` — tightened report grounding so a single capture cannot be presented as a
+  modal pattern and generic oscillator/regain/damage signals cannot be relabeled as
+  laps, pickups, or collisions without evidence.
 
 ### Actual contracts
 
@@ -205,6 +208,11 @@ Built by Jim on 2026-07-14. Milestone commits:
   race-state done margins were printed. Training stayed idle throughout.
 - The primer hash remained byte-identical across the product copilot turn. The raw second
   user event carried its compact F-Zero envelope and matching receipt revision.
+- Acceptance E retest job `watch_brain-224f9314` completed CPU-only over 1,151 BBP1
+  steps and returned the persisted report verbatim. The copilot correctly labeled the
+  result as one capture and grounded its numeric summary, but still inferred obstacle/wall
+  causality and said "lap after lap" without report evidence. Acceptance E therefore
+  remains failed; no further primer iteration was attempted in this build cycle.
 
 ### Gate F and remaining god-owned checks
 
@@ -212,5 +220,6 @@ Gate F failed in the product harness, so the primer intentionally remains report
 The `:8082` proxy logged successful image extraction and the copilot issued `Read` for both
 files, but it reversed their identities: it described `frame_c.png` as black and assigned
 the Little Mermaid/open-water frame to `frame_e.png`. This was reported to god in
-conversation `conv-7f9a96`; no frame/vision fallback was added. God still owns visual UI
-inspection, inference-host prompt-cache measurement, and the real Confirm acceptance run.
+conversation `conv-7f9a96`; no frame/vision fallback was added. God still owns Acceptance
+E disposition, visual UI inspection, inference-host prompt-cache measurement, and the real
+Confirm acceptance run.
