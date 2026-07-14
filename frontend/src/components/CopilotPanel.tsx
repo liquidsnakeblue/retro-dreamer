@@ -14,9 +14,9 @@ const API = '/api/copilot'
 type TextEv = {
   seq: number
   ts: number
-  kind: 'user' | 'assistant' | 'tool' | 'meta' | 'raw'
+  kind: 'user' | 'assistant' | 'tool' | 'meta' | 'raw' | 'grounding-warning'
   text: string
-  detail?: string // newer backend: full tool input (e.g. complete bash command)
+  detail?: string // full auxiliary detail (for example tool input or warning evidence)
 }
 
 type ProposalEv = {
@@ -345,6 +345,18 @@ function EventRow({
     return (
       <div className="px-3 py-2 rounded text-xs bg-retro-surface/60 border border-retro-border/50 copilot-md">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{e.text}</ReactMarkdown>
+      </div>
+    )
+  }
+  if (e.kind === 'grounding-warning') {
+    const warning = e.text.replace(/^Grounding(?: vocabulary)? telemetry:\s*/i, '')
+    return (
+      <div
+        className="px-3 py-1 text-[10px] text-retro-text-dim"
+        title={e.detail || e.text}
+      >
+        <span className="font-semibold text-retro-warning">[⚠ grounding telemetry]</span>{' '}
+        {warning}
       </div>
     )
   }
