@@ -11,8 +11,19 @@ Saves a compressed .npz with:
   sizes    block lengths (flat index -> address via these)
   health/pos/speed/reverse (T,) — env vars for locating events
 
-Usage:
+Usage (checkpoint mode — drives a TRAINED brain):
   python _retro_ram_capture.py <checkpoint.ckpt> <initial_state> <max_steps> <out.npz>
+
+Usage (random mode — NO checkpoint needed; drives uniform-random actions, so a
+game with no trained brain can still be captured for config validation):
+  python _retro_ram_capture.py <checkpoint.ckpt|random> <initial_state> <max_steps> <out.npz> random <template_config.yaml> <game_id> <game_dir>
+
+  `random` may be passed as argv[1] (sentinel) OR as argv[5] (flag); the
+  remaining game/template args follow. Random mode builds cfg from a TEMPLATE
+  config.yaml (any existing run's config works — env keys are overridden by the
+  explicit game_id/game_dir/initial_state) instead of from the checkpoint's run
+  dir, and skips agent/fabric construction entirely. Checkpoint-mode behavior is
+  byte-for-byte unchanged when the flag is absent.
 """
 import os
 import sys
@@ -47,36 +58,74 @@ from sheeprl.envs.retro_dreamer import RetroDreamerWrapper
 from sheeprl.utils.env import make_env
 from sheeprl.utils.utils import dotdict
 
-ckpt_path = Path(sys.argv[1]).resolve()
-initial_state = sys.argv[2]
-max_steps = int(sys.argv[3])
-out_path = Path(sys.argv[4]).resolve()
+# --- argv parsing: additive random mode (sentinel argv[1]=='random' or flag argv[5]) ---
+_random_mode = (len(sys.argv) > 1 and sys.argv[1] == "random")
+if _random_mode:
+    # argv: random <initial_state> <max_steps> <out.npz> <template_config.yaml> <game_id> <game_dir>
+    initial_state = sys.argv[2]
+    max_steps = int(sys.argv[3])
+    out_path = Path(sys.argv[4]).resolve()
+    template_cfg_path = Path(sys.argv[5]).resolve()
+    _game_id = sys.argv[6]
+    _game_dir = Path(sys.argv[7]).resolve()
+    ckpt_path = None  # no brain in random mode
+else:
+    ckpt_path = Path(sys.argv[1]).resolve()
+    initial_state = sys.argv[2]
+    max_steps = int(sys.argv[3])
+    out_path = Path(sys.argv[4]).resolve()
 
-cfg = dotdict(
-    OmegaConf.to_container(
-        OmegaConf.load(ckpt_path.parent.parent / "config.yaml"), resolve=True
+if ckpt_path is not None:
+    cfg = dotdict(
+        OmegaConf.to_container(
+            OmegaConf.load(ckpt_path.parent.parent / "config.yaml"), resolve=True
+        )
     )
-)
+else:
+    # Random mode: cfg from a TEMPLATE config (any run's config.yaml), overridden
+    # by the explicit game_id/game_dir so no run dir for the target game is
+    # required. Only the env.* keys used by make_env need to be sane.
+    cfg = dotdict(
+        OmegaConf.to_container(
+            OmegaConf.load(template_cfg_path), resolve=True
+        )
+    )
+    cfg.setdefault("seed", 42)
+    cfg.env.wrapper.game_id = _game_id
+    cfg.env.wrapper.game_dir = str(_game_dir)
+
 cfg.env.num_envs = 1
 cfg.env.capture_video = False
 cfg.env.wrapper.initial_state = initial_state
 
 torch.set_num_threads(6)
-fabric = Fabric(accelerator="cpu", devices=1, num_nodes=1)
-fabric.launch()
-state = fabric.load(str(ckpt_path))
+
+if ckpt_path is not None:
+    fabric = Fabric(accelerator="cpu", devices=1, num_nodes=1)
+    fabric.launch()
+    state = fabric.load(str(ckpt_path))
 
 env = make_env(cfg, cfg.seed, 0, "logs/ram_capture", "capture")()
-action_space = env.action_space
-actions_dim = tuple(
-    action_space.nvec.tolist()
-    if hasattr(action_space, "nvec")
-    else [action_space.n]
-)
-_, _, _, _, player = build_agent(
-    fabric, actions_dim, False, cfg, env.observation_space,
-    state["world_model"], state["actor"],
-)
+
+if ckpt_path is not None:
+    action_space = env.action_space
+    actions_dim = tuple(
+        action_space.nvec.tolist()
+        if hasattr(action_space, "nvec")
+        else [action_space.n]
+    )
+    _, _, _, _, player = build_agent(
+        fabric, actions_dim, False, cfg, env.observation_space,
+        state["world_model"], state["actor"],
+    )
+else:
+    # Random driver: uniform sample over the MultiBinary action space each step.
+    action_space = env.action_space
+    _act_shape = action_space.shape
+    _act_dtype = action_space.dtype
+    _rng = np.random.default_rng(cfg.seed)
+    def player_act():
+        return _rng.integers(0, 2, size=_act_shape, dtype=_act_dtype)
 
 inner = env
 while not isinstance(inner, RetroDreamerWrapper):
@@ -95,16 +144,20 @@ ram = np.zeros((max_steps, n), dtype=np.uint8)
 vars_log = None  # keyed off the game's actual info vars at first step
 
 obs = env.reset(seed=cfg.seed)[0]
-player.num_envs = 1
-player.init_states()
+if ckpt_path is not None:
+    player.num_envs = 1
+    player.init_states()
 t0 = time.perf_counter()
 steps_done = 0
 for step in range(max_steps):
-    torch_obs = prepare_obs(fabric, obs, cnn_keys=cfg.algo.cnn_keys.encoder)
-    real_actions = player.get_actions(
-        torch_obs, True, {k: v for k, v in torch_obs.items() if k.startswith("mask")}
-    )
-    real_actions = torch.stack([a.argmax(dim=-1) for a in real_actions], -1).cpu().numpy()
+    if ckpt_path is not None:
+        torch_obs = prepare_obs(fabric, obs, cnn_keys=cfg.algo.cnn_keys.encoder)
+        real_actions = player.get_actions(
+            torch_obs, True, {k: v for k, v in torch_obs.items() if k.startswith("mask")}
+        )
+        real_actions = torch.stack([a.argmax(dim=-1) for a in real_actions], -1).cpu().numpy()
+    else:
+        real_actions = player_act()
     obs, reward, terminated, truncated, info = env.step(
         real_actions.reshape(env.action_space.shape)
     )
@@ -130,7 +183,7 @@ np.savez_compressed(
     ram=ram[:steps_done],
     offsets=offsets,
     sizes=sizes,
-    ckpt=str(ckpt_path.name),
+    ckpt=("random" if ckpt_path is None else str(ckpt_path.name)),
     state=initial_state,
     **{k: v[:steps_done] for k, v in (vars_log or {}).items()},
 )
