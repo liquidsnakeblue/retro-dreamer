@@ -301,6 +301,43 @@ Probes take 1-3 minutes; captures and walkers longer.
 - GET/PUT /api/games/{id}/config/{data.json|training.json|actions.json|metadata.json}
   — the canonical way to read/write configs. PUT body = the full JSON file.
 
+## Reading training metrics & history (how a run went / did it get stuck)
+
+You cannot import tensorflow/tensorboard from the shell's system python — it
+isn't installed, and `pip install` is blocked. NEVER try. The data is already
+served two ways; use these, don't parse raw *.tfevents by hand.
+
+- GET /api/metrics/history — a LIVE SNAPSHOT of the CURRENTLY-loaded run only
+  (current_step, current_episode, avg_return, max_return, steps_per_second).
+  It is NOT per-run history and ignores any game_id. `avg_length` reads 0.0 —
+  ignore it. Use for "how is it doing right now", not "how did run X go".
+- GET /api/episodes — recent episode records (returns, lengths). Good for the
+  last-N-episodes view.
+- GET /api/training/logs — tail of the live SheepRL stdout/stderr.
+- GET /api/tensorboard/logdir — the on-disk logdir, if you need file paths.
+
+- The TensorBoard HTTP API on http://localhost:6006 is THE source for a
+  finished run's full scalar history. Pure curl, no deps:
+  - list runs:  curl -s http://localhost:6006/data/runs
+    -> ["LittleMermaid-Nes-v0/XL_2026-07-12_11-16-01", ...] (Game/SIZE_stamp)
+  - list tags:  curl -s http://localhost:6006/data/plugin/scalars/tags
+    -> which scalars each run logged.
+  - pull one:   curl -s "http://localhost:6006/data/plugin/scalars/scalars?tag=<TAG>&run=<RUN>"
+    -> [[wall_time, step, value], ...]. URL-encode the "/" in tag/run as %2F
+       (e.g. tag=Game%2Fep_len_avg, run=LittleMermaid-Nes-v0%2FXL_2026-...).
+- The tags that answer "did it learn / did it get stuck":
+  - Rewards/rew_avg — climbing = learning; flat/low across the whole run =
+    stuck, the agent never found the reward.
+  - Game/ep_len_avg — long episodes that stay flat while rew_avg does NOT
+    climb = looping / stalled at one spot, not progressing.
+  - Loss/* and State/kl — learning health; Params/replay_ratio — the setting.
+- Cross-check the numbers against the save-state NAMES (GET /api/games/{id}
+  annotated_states) and any run notes on disk — a cluster of states around one
+  map location is itself evidence the humans hit a wall there.
+- Last resort if you must parse *.tfevents directly, use the STUDIO venv, never
+  system python: ~/fzero-dreamer/venv/bin/python with
+  `from tensorboard.backend.event_processing import event_accumulator`.
+
 ## Training control (HUMAN GATE — never start/stop/switch without an explicit yes)
 
 - POST /api/training/start {"game_id": "...", "model_size":
