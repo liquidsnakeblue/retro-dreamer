@@ -254,3 +254,56 @@ and no opportunistic capture landed. Left as documented SUSPECT; low impact.
 ### Finding F5 — Mario unused vars (flagged)
 Re-check line added to finding 5 above (re-validate type/semantic if ever wired
 to reward). No action.
+
+---
+
+## Resolution log 2 — random-mode captures (2026-07-14, god-acked path (i))
+
+God approved patching `_retro_ram_capture.py` with an additive random-action
+mode (commit b6aada6) — no checkpoint required, drives uniform-random actions,
+existing checkpoint invocation byte-for-byte unchanged. This unblocked F1/F3/F4.
+Captures live in `logs/audit-captures/` (gitignored; never committed).
+
+### F3 RESOLVED — 1942 + 1943 validated: both OK ✅
+Random-action captures (state `1Player.Level1` / `Level1`):
+
+| game | var | type | observed band | config | verdict |
+|---|---|---|---|---|---|
+| 1942-Nes-v0 | lives | `|u1` | **0 – 2** (T=518) | done `equal 0` | **OK** — reaches 0, fires; unsigned `|u1` correct (no signed-type bug) |
+| 1942-Nes-v0 | score | `>n6` | **0 – 450** (T=518) | reward 1.0/delta-positive | **OK** — BCD-6 decodes correctly (scored during random play) |
+| 1943-Nes-v0 | lives | `|u1` | **0 – 1** (T=380) | done `equal 0` | **OK** — reaches 0, fires |
+| 1943-Nes-v0 | score | `>n4` | **0 – 7** (T=380) | reward 0.01/delta-positive | **OK** — BCD-4 decodes correctly |
+
+**Both games clear the coverage gap.** No config changes needed. (Aside:
+1943's `score` reward weight 0.01 vs 1942's 1.0 is a 100× scale difference —
+not a bug, but worth a deliberate look if relative learning signal ever matters;
+flagged, no action.)
+
+### F1 RESOLVED — FZero health done-condition is NOT dead: OK ✅
+Random-action capture on FZero-Test (state `go`, T=190, random steering crashes):
+`health` (`<u2`) observed band **64 – 2048**, trajectory
+`2048→1942→1675→1544→1196→1086→814→724→280→195` (sampling every 20 steps;
+true min **64**). The done-condition `health < 100` **is reachable** (health
+hit 64, well below ref 100) — it is NOT the dead condition the trained-brain
+capture (floor 468) made it look like. The surviving trained brain simply never
+crashed hard enough to trigger it. **No config change needed.** (`race_on`
+stayed 1 throughout; the env terminated at step 190 via a non-wrapper signal,
+likely the emulator's own game-over — orthogonal.) Initial SUSPECT upgraded to
+**OK** with evidence.
+
+### F4 — LM `score` `>n8`: still SUSPECT (random play can't progress it)
+Random-action capture on LM (state `Level1`, T=1200): `score` stayed **0** —
+but so did nearly everything (`health` const 3, `lives` const 2, `playerX`
+const 64 = spawn, `stage` const 0). The random agent never moved off spawn
+(`playerX` pinned at 64), so scoring was never exercised. **Cannot
+distinguish "brain didn't score" from "BCD-8 decode broken"** — the capture
+is inconclusive (expected piggyback-only outcome per ack). Left as documented
+SUSPECT, low impact. A definitive test would need a *human-played* trace that
+visibly scores; out of scope (no human-play capture tooling). Reward weight is
+small (0.05) and the real objective signal is `stage`/pearls, so impact is low.
+
+### Card status
+**All open items closed:** F2 (FZero-Test) applied + committed; F3 (1942/1943)
+validated OK; F1 (FZero health) validated OK; F4 (LM score) inconclusive-low-
+impact, documented; F5 (Mario) flagged. No remaining config changes pending;
+no bugs requiring code fixes.
