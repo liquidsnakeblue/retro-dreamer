@@ -28,6 +28,8 @@ PRIMER_PATH = PROJECT_ROOT / "backend" / "copilot_primer.md"
 CONFIG_DIR = Path.home() / ".claude-local"
 PROXY_SCRIPT = Path.home() / "lmstudio-proxy" / "proxy.py"
 PROXY_ENV = Path.home() / "lmstudio-proxy" / ".env"
+STUDIO_STATE_START = "<STUDIO_STATE>"
+STUDIO_STATE_END = "</STUDIO_STATE>"
 
 router = APIRouter(prefix="/api/copilot")
 
@@ -35,6 +37,17 @@ _lock = threading.Lock()
 _proc: Optional[subprocess.Popen] = None
 _events: list = []  # [{seq, ts, kind, text, raw?}]
 _seq = 0
+_studio_state_builder = None
+
+
+def set_studio_state_builder(builder):
+    global _studio_state_builder
+    _studio_state_builder = builder
+
+
+def compose_user_message(text: str, studio_state: dict) -> str:
+    envelope = json.dumps(studio_state, separators=(",", ":"), ensure_ascii=False)
+    return f"{STUDIO_STATE_START}\n{envelope}\n{STUDIO_STATE_END}\n{text}"
 
 
 def _emit(kind: str, text: str, detail: str = None):
@@ -157,23 +170,37 @@ def start(req: StartReq = None):
 
 class SendReq(BaseModel):
     text: str
+    focus_game_id: Optional[str] = None
+    active_tab: Optional[str] = None
 
 
 @router.post("/send")
 def send(req: SendReq):
     if _proc is None or _proc.poll() is not None:
         raise HTTPException(409, "copilot not running — POST /api/copilot/start first")
+    if _studio_state_builder is None:
+        raise HTTPException(500, "Studio state builder not initialized")
+    studio_state = _studio_state_builder.build(
+        req.focus_game_id, active_tab=req.active_tab, projection="compact"
+    )
+    enveloped_text = compose_user_message(req.text, studio_state)
     msg = {
         "type": "user",
-        "message": {"role": "user", "content": [{"type": "text", "text": req.text}]},
+        "message": {"role": "user", "content": [{"type": "text", "text": enveloped_text}]},
     }
-    _emit("user", req.text)
+    # The API event is the auditable raw user payload; the dashboard strips
+    # only the anchored studio-state envelope before rendering the bubble.
+    _emit("user", enveloped_text)
     try:
         _proc.stdin.write(json.dumps(msg) + "\n")
         _proc.stdin.flush()
     except (BrokenPipeError, OSError) as exc:
         raise HTTPException(500, f"copilot stdin write failed: {exc}")
-    return {"status": "sent"}
+    return {
+        "status": "sent",
+        "studio_revision": studio_state["revision"],
+        "observed_at": studio_state["generated_at"],
+    }
 
 
 @router.get("/events")
@@ -181,7 +208,8 @@ def events(since: int = 0):
     with _lock:
         evs = [e for e in _events if e["seq"] > since]
         running = _proc is not None and _proc.poll() is None
-    return {"running": running, "events": evs, "last_seq": _seq}
+        last_seq = _seq
+    return {"running": running, "events": evs, "last_seq": last_seq}
 
 
 @router.post("/stop")

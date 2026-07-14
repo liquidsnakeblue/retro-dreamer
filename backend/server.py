@@ -27,9 +27,17 @@ from backend.games.manager import GameManager
 from backend.training.trainer import DreamerV3Trainer
 from backend.training.config import TrainingConfig
 from backend.training.callbacks import WebSocketBroadcaster
-from backend.api.routes import router as api_router, set_dependencies
+from backend.api.routes import (
+    router as api_router,
+    set_dependencies,
+    set_studio_state_builder as set_api_state_builder,
+)
 from backend.tools import router as tools_router
-from backend.copilot import router as copilot_router
+from backend.copilot import (
+    router as copilot_router,
+    set_studio_state_builder as set_copilot_state_builder,
+)
+from backend.studio_state import StudioStateBuilder
 from backend.api.ws import ConnectionManager
 
 # Global state
@@ -37,6 +45,7 @@ trainer: DreamerV3Trainer | None = None
 game_manager: GameManager | None = None
 ws_manager = ConnectionManager()
 tb_process: subprocess.Popen | None = None
+studio_state_builder: StudioStateBuilder | None = None
 
 
 def start_tensorboard(logdir: str, port: int = 6006):
@@ -78,7 +87,7 @@ def stop_tensorboard():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle manager."""
-    global trainer, game_manager
+    global trainer, game_manager, studio_state_builder
 
     # Create GameManager pointing at PROJECT_ROOT/games/
     game_manager = GameManager(PROJECT_ROOT / "games")
@@ -91,6 +100,9 @@ async def lifespan(app: FastAPI):
 
     # Inject both into routes
     set_dependencies(trainer, game_manager)
+    studio_state_builder = StudioStateBuilder(game_manager, trainer)
+    set_api_state_builder(studio_state_builder)
+    set_copilot_state_builder(studio_state_builder)
 
     # A previous server that crashed/bounced mid-training leaves its session
     # row 'running' forever, which poisons every running-state readout

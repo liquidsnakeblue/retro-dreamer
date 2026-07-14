@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import type { TrainingStatus } from '../hooks/useTrainingSocket'
 
 const API = '/api/copilot'
 
@@ -12,15 +13,30 @@ type Ev = {
   detail?: string // newer backend: full tool input (e.g. complete bash command)
 }
 
+interface CopilotPanelProps {
+  selectedGame: string
+  status: TrainingStatus | null
+}
+
+const STATE_START = '<STUDIO_STATE>\n'
+const STATE_END = '\n</STUDIO_STATE>\n'
+
+export function visibleUserText(text: string): string {
+  if (!text.startsWith(STATE_START)) return text
+  const end = text.indexOf(STATE_END, STATE_START.length)
+  return end === -1 ? '' : text.slice(end + STATE_END.length)
+}
+
 /** Chat panel over the resident copilot — a headless claude-local session
  * (Qwen 3.6 27B on the 2x3090 box) driving the studio's HTTP tools.
  * Reasoning model: minutes-long thinking is normal; the meta events keep
  * the human oriented while it works. */
-export function CopilotPanel() {
+export function CopilotPanel({ selectedGame, status }: CopilotPanelProps) {
   const [events, setEvents] = useState<Ev[]>([])
   const [running, setRunning] = useState(false)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [contextReceipt, setContextReceipt] = useState<{ revision: string; observedAt: string } | null>(null)
   const lastSeq = useRef(0)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -52,6 +68,14 @@ export function CopilotPanel() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [events.length])
 
+  useEffect(() => {
+    if (!selectedGame) return
+    fetch(`/api/studio/state?focus_game_id=${encodeURIComponent(selectedGame)}`)
+      .then((res) => res.ok ? res.json() : Promise.reject())
+      .then((state) => setContextReceipt({ revision: state.revision, observedAt: state.generated_at }))
+      .catch(() => {})
+  }, [selectedGame, status?.state, status?.game_id])
+
   async function start() {
     setBusy(true)
     try {
@@ -69,11 +93,15 @@ export function CopilotPanel() {
     const text = input.trim()
     if (!text) return
     setInput('')
-    await fetch(`${API}/send`, {
+    const res = await fetch(`${API}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, focus_game_id: selectedGame, active_tab: 'copilot' }),
     })
+    if (res.ok) {
+      const receipt = await res.json()
+      setContextReceipt({ revision: receipt.studio_revision, observedAt: receipt.observed_at })
+    }
   }
 
   return (
@@ -85,6 +113,11 @@ export function CopilotPanel() {
             <span className={`w-2 h-2 rounded-full ${running ? 'bg-retro-success animate-pulse' : 'bg-retro-border'}`} />
             {running ? 'Qwen 3.6 27B — local' : 'offline'}
           </span>
+          {contextReceipt && (
+            <span className="text-[10px] text-retro-text-dim font-mono" title={contextReceipt.observedAt}>
+              context r{contextReceipt.revision.slice(0, 8)} · observed {new Date(contextReceipt.observedAt).toLocaleTimeString()}
+            </span>
+          )}
         </div>
         <div className="flex gap-2">
           {!running ? (
@@ -145,12 +178,14 @@ function EventRow({ e }: { e: Ev }) {
     )
   }
   if (e.kind === 'tool') return <ToolRow e={e} />
+  const text = e.kind === 'user' ? visibleUserText(e.text) : e.text
+  if (e.kind === 'user' && !text) return null
   const style: Record<string, string> = {
     user: 'text-retro-text bg-retro-surface border-l-2 border-retro-accent whitespace-pre-wrap',
     meta: 'text-retro-text-dim italic text-[10px]',
     raw: 'text-retro-text-dim font-mono text-[10px] whitespace-pre-wrap',
   }
-  return <div className={`px-3 py-2 rounded text-xs ${style[e.kind]}`}>{e.text}</div>
+  return <div className={`px-3 py-2 rounded text-xs ${style[e.kind]}`}>{text}</div>
 }
 
 /** One-line tool call, expandable when we have (or can recover) the full input.

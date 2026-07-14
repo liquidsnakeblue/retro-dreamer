@@ -29,12 +29,23 @@ class CreateGameRequest(BaseModel):
 # Injected by server.py
 _trainer = None
 _game_manager = None
+_studio_state_builder = None
 
 
 def set_dependencies(trainer, game_manager):
     global _trainer, _game_manager
     _trainer = trainer
     _game_manager = game_manager
+
+
+def set_studio_state_builder(builder):
+    global _studio_state_builder
+    _studio_state_builder = builder
+
+
+def _invalidate_studio_state():
+    if _studio_state_builder is not None:
+        _studio_state_builder.invalidate()
 
 
 # ------------------------------------------------------------------
@@ -170,25 +181,26 @@ async def suspend_training():
 
 @router.get("/advisor/model_size")
 async def model_size_advisor():
-    """Recommend a DreamerV3 size for this machine's GPU. Measured VRAM at
-    batch 16 / seq 64 / AMP on an RTX 5090: XL ~31GB, L ~19GB, S ~7GB."""
-    import torch
+    from backend.studio_state import model_size_advice
+    return model_size_advice()
 
-    if not torch.cuda.is_available():
-        return {"gpu": None, "vram_gb": 0, "recommended": "debug",
-                "note": "No CUDA GPU visible — debug size only (CPU training is impractical)."}
-    props = torch.cuda.get_device_properties(0)
-    vram = props.total_memory / 1e9
-    tiers = [("xl", 32.0), ("large", 20.0), ("medium", 12.0), ("small", 8.0), ("debug", 0.0)]
-    rec = next(name for name, need in tiers if vram >= need)
-    return {
-        "gpu": props.name,
-        "vram_gb": round(vram, 1),
-        "recommended": rec,
-        "fits": [name for name, need in tiers if vram >= need],
-        "note": "Bigger models score higher AND need less data (DreamerV3 Fig 6c) — "
-                "run the largest size that fits.",
-    }
+
+@router.get("/studio/state")
+def studio_state(
+    focus_game_id: Optional[str] = None,
+    active_tab: Optional[str] = None,
+    projection: str = "compact",
+):
+    if _studio_state_builder is None:
+        raise HTTPException(500, "Studio state builder not initialized")
+    try:
+        return _studio_state_builder.build(
+            focus_game_id, active_tab=active_tab, projection=projection
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.get("/workspaces")
@@ -398,6 +410,7 @@ async def put_game_config(game_id: str, filename: str, data: dict):
         raise HTTPException(500, "GameManager not initialized")
     try:
         _game_manager.write_config(game_id, filename, data)
+        _invalidate_studio_state()
         return {"status": "ok", "game_id": game_id, "filename": filename}
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc))
@@ -413,8 +426,10 @@ async def promote_game(game_id: str):
     if _game_manager is None:
         raise HTTPException(500, "GameManager not initialized")
     try:
-        return {"status": "promoted", "game_id": game_id,
-                **_game_manager.promote_game(game_id)}
+        result = {"status": "promoted", "game_id": game_id,
+                  **_game_manager.promote_game(game_id)}
+        _invalidate_studio_state()
+        return result
     except FileExistsError as exc:
         raise HTTPException(409, str(exc))
     except ValueError as exc:
@@ -448,6 +463,7 @@ async def import_game(
     body = await rom.read()
     (game_dir / f"rom{ext}").write_bytes(body)
     (game_dir / "rom.sha").write_text(hashlib.sha1(body).hexdigest() + "\n")
+    _invalidate_studio_state()
     return {
         "status": "imported",
         "game_id": game_id,
@@ -470,6 +486,7 @@ async def create_game(req: CreateGameRequest):
         raise HTTPException(500, "GameManager not initialized")
     try:
         game_dir = _game_manager.create_game(req.game_id, req.display_name, req.system)
+        _invalidate_studio_state()
         return {
             "status": "created",
             "game_id": req.game_id,
@@ -494,6 +511,7 @@ async def scaffold_builtin(game_id: str):
         raise HTTPException(404, f"'{game_id}' is not a built-in retro game")
     try:
         game_dir = _game_manager.scaffold_from_builtin(game_id)
+        _invalidate_studio_state()
         return {
             "status": "scaffolded",
             "game_id": game_id,

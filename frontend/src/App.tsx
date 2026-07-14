@@ -127,7 +127,7 @@ export default function App() {
 
             {activeTab === 'copilot' && (
               <div className="h-full relative">
-                <CopilotPanel />
+                <CopilotPanel selectedGame={selectedGame} status={status} />
               </div>
             )}
           </div>

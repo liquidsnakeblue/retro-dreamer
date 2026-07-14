@@ -83,6 +83,28 @@ def submit(tool: str, cmd: list, cwd: Path = SHEEPRL_DIR) -> str:
     return job_id
 
 
+def snapshot_jobs() -> list[dict]:
+    """Bounded job facts for ambient studio state (no commands or log paths)."""
+    with _lock:
+        jobs = [dict(job) for job in _jobs.values()]
+    out = []
+    for job in sorted(jobs, key=lambda item: item["started_at"], reverse=True):
+        result = job.get("result")
+        if result is not None and len(json.dumps(result, default=str)) > 1000:
+            result = {"keys": sorted(result) if isinstance(result, dict) else None,
+                      "detail": "result omitted from compact studio state"}
+        out.append({
+            "id": job["id"],
+            "tool": job["tool"],
+            "status": job["status"],
+            "started_at": job["started_at"],
+            "ended_at": job.get("ended_at"),
+            "result": result,
+            "error": job.get("error"),
+        })
+    return out
+
+
 def _game_dir(game_id: str) -> Path:
     d = GAMES_DIR / game_id
     if not (d / "data.json").exists():
