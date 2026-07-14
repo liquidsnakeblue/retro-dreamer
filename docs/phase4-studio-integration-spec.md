@@ -113,6 +113,16 @@ F. **Product-harness vision check** (added 2026-07-14 after the Pam vision test)
    IMAGE NOT VISIBLE ×5, zero confabulation); the product path is separate and vision-capable
    by design, but was never verified E2E.
 
+   **GATE F RESULT (2026-07-14, jim): FAIL — reversed identities.** Images flowed (:8082
+   logged tool_result extraction; Read calls issued for both files) but the copilot assigned
+   frame_c's content description to frame_e and called frame_c black. Primer correctly shipped
+   REPORT-ONLY. **Test-design flaw (god):** the ground-truth key above leaked the answers into
+   this spec, so blind-confabulation-from-spec cannot be excluded from the FAIL. RETEST
+   PROTOCOL (card product-vision-association, dwight): fresh frames with PROGRAMMATIC ground
+   truth published nowhere (solid colors + rendered text), ONE image per turn (kills the
+   association ambiguity), then two-in-one-turn to reproduce the reversal, plus inspection of
+   the :8082 proxy's image re-injection ordering. Gate F reopens only against that protocol.
+
 ## Non-goals (defer; do not build)
 
 Full onboarding flow, arbitrary config edits, stop/promote approval flows, durable chat
@@ -128,3 +138,79 @@ feature work (hi/lo byte-pair fusion stays deferred), retention policies.
 Commit per milestone, not one megacommit. `games/LittleMermaid-Nes-v0/` is git-UNTRACKED
 (ROMs) — never `git add` it. Bugs found along the way: fix if in-scope+small, otherwise
 new card on the sweep — Schuyler's standing order is active.
+
+## As-built
+
+Built by Jim on 2026-07-14. Milestone commits:
+
+- `47582a9` — promoted the accepted engine and six frozen fixtures; added real-CLI
+  regressions for Little Mermaid, Mario, and F-Zero. The engine's SHA-256 remains
+  `cefe400d3079b81b846f7556c9e529be6e0cf0881079e8efc4603f5f9bdeeb7e`.
+- `680a653` — added the single compact/full `StudioStateBuilder`, revision/timestamps,
+  `GET /api/studio/state`, per-turn USER-message envelope, raw-event audit trail,
+  dashboard envelope stripping, and visible context receipts.
+- `d370bbe` — added game-scoped, CPU-only `POST /api/tools/watch_brain`, the composed
+  capture/report runner, one managed artifact directory, exact result contract, and
+  the report-only copilot reflex/grounding rules.
+- `f1149a1` — added deterministic immutable new/resume/switch proposals, resolved-head
+  setting locks, typed proposal events/card, HttpOnly browser approval capability,
+  one-time Confirm/Cancel broker, fresh-state receipt, and `open_tab(metrics)` intent.
+- `7da5e53` — hardened proposal revisions with save-state/head/replay/config identity,
+  preflighted `buffer-meta.json` compatibility, preserved successful mutation receipts
+  across ambient-read failures, and renewed expired browser approval sessions once.
+
+### Actual contracts
+
+- Compact state is the same code path as `projection=full`; material revisions exclude
+  fast metrics/clocks but include focus, workspace config and state artifacts, head and
+  replay compatibility, and structural live-training config. Absolute artifact paths are
+  full-only. The inventory scan is lock-protected and cached for 30 seconds.
+- Every copilot send writes one content block in one `role=user` message:
+  `<STUDIO_STATE>\n{compact JSON}\n</STUDIO_STATE>\n{verbatim text}`. The system-prompt
+  launch path is unchanged. `/api/copilot/events` retains the exact envelope; only the
+  anchored leading envelope is hidden by `CopilotPanel`.
+- `watch_brain` validates the custom game, training JSON, state, and game-scoped catalog
+  head before it submits one existing-manager job. The job owns `output.log`,
+  `capture.npz`, and `report.txt`; its result is exactly `npz_path`, `report_path`, and
+  `report_text`. Both job manager and composition runner force
+  `CUDA_VISIBLE_DEVICES=""`; the unchanged report engine runs under system Python.
+- `POST /api/training/plan` accepts the game plus optional state/model/effective-setting
+  preferences. Resume plans read the head's resolved Hydra YAML and lock architecture,
+  states, replay ratio, environments, and batch. Confirm accepts no replacement body,
+  revalidates the bound revision, atomically consumes the plan, and dispatches only the
+  stored `/api/training/start` or `/api/training/switch` request. Cancel only consumes the
+  plan. The browser capability exists solely as an HttpOnly, SameSite=Strict cookie scoped
+  to `/api/training/plans`; it is absent from JSON, studio state, events, and JavaScript.
+
+### Verification record
+
+- `python3 -m unittest discover -s backend/tests -p 'test_*.py' -v`: 26/26 green.
+  Coverage includes the three frozen engine stories, compact/full revision stability,
+  raw envelope receipt, CPU pinning and composed-result parsing, preset/resume/switch
+  planning, immutable exact bodies, replay incompatibility, missing credential, stale
+  rejection, concurrent one-shot Confirm, Cancel with zero executor calls, and a
+  successful execution receipt when the post-read fails.
+- `npm run build`: production TypeScript/Vite build green (only the existing bundle-size
+  warning). The Copilot panel remains mounted across tab changes, renders only typed
+  proposal data, calls only broker actions, refreshes status, and honors the metrics intent.
+- Live `:8091` F-Zero resume dry plan: compact state 3,447 bytes; head snapshot `1195` at
+  step `756696`; XL; states `go+BBP1+SOP1+DWP1+SP1`; batch `16x64`; `num_envs=6`.
+  Confirm without the browser cookie returned 403. The credentialed Cancel returned
+  `cancelled`, and before/after training status remained exactly idle.
+- Live Little Mermaid watch job `watch_brain-bb8ec56a`: 1,400-step capture and persisted
+  report completed CPU-only; 22 events, deaths at 476/980 with
+  `playerPage=6, roomPos=1`, terminal/done margin at lives 0, and life segments
+  476/504/420. Live F-Zero BBP1 job `watch_brain-f1c08963`: significant damage clustered
+  at position -1/+173/+175 relative, speed varied up to 4,087, and both health and
+  race-state done margins were printed. Training stayed idle throughout.
+- The primer hash remained byte-identical across the product copilot turn. The raw second
+  user event carried its compact F-Zero envelope and matching receipt revision.
+
+### Gate F and remaining god-owned checks
+
+Gate F failed in the product harness, so the primer intentionally remains report-only.
+The `:8082` proxy logged successful image extraction and the copilot issued `Read` for both
+files, but it reversed their identities: it described `frame_c.png` as black and assigned
+the Little Mermaid/open-water frame to `frame_e.png`. This was reported to god in
+conversation `conv-7f9a96`; no frame/vision fallback was added. God still owns visual UI
+inspection, inference-host prompt-cache measurement, and the real Confirm acceptance run.
