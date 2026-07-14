@@ -151,9 +151,9 @@ and names make both impossible.
 {
   "actions": [
     {"name": "NoOp",       "buttons": []},
-    {"name": "Fire",       "buttons": ["B"]},
-    {"name": "Fire+Right", "buttons": ["B", "RIGHT"]},
-    {"name": "RunJump-Right", "buttons": ["RIGHT", "A", "B"]}
+    {"name": "B",          "buttons": ["B"]},
+    {"name": "B+Right",    "buttons": ["B", "RIGHT"]},
+    {"name": "B+A+Right",  "buttons": ["RIGHT", "A", "B"]}
   ]
 }
 ```
@@ -168,13 +168,14 @@ and names make both impossible.
   - PCEngine: II, III, SELECT, RUN, UP, DOWN, LEFT, RIGHT, I, IV, V, VI
 - A name not in the system's list is a write-time error and the error
   message lists the valid names — fix and re-write.
-- Know what each button DOES in this game before building combos (NES: A is
-  usually jump, B is usually run/fire — but verify per game, e.g. with a
-  probe: an action that never changes any RAM variable is probably dead).
+- Button tokens prove only which inputs are held; they do not establish game
+  mechanics. Verify the mapping for this game before using semantic action
+  names. Until then, call them literal inputs such as `B`, `A`, or `B+RIGHT`.
 - 4-12 actions. Combos a human would HOLD (run+jump, fire+direction) belong;
-  menu buttons (Start/Select) stay OUT of the action space. Include every
-  button the game NEEDS to be played — an agent without the jump button can
-  never learn to jump.
+  menu buttons (Start/Select) stay OUT of the action space. Once a mapping is
+  verified, include required inputs. If a mapped input is absent, report only
+  that the current table cannot select it; the table alone does not prove a
+  failure outcome, root cause, or that success is impossible.
 - Include NoOp (empty buttons list) as action 0.
 - The reward probe prints an `ACTIONS:` line showing what every action
   really presses — read it and check it matches your intent.
@@ -407,10 +408,9 @@ listed so you understand the proposal's consequences; NEVER call them directly:
 7. done conditions must be REACHABLE. lives==0 never fires if the state
    starts with 99 lives and probes run 200 steps. Check `never_done`.
 8. Write action buttons by NAME (["RIGHT","A"]) — never 0/1 index arrays.
-   A missing capability is invisible to training: an action set without the
-   jump button trains a Mario that converges to walking into the first
-   goomba forever. List what the game NEEDS (jump? run? fire?) and check
-   every needed button appears in at least one action.
+   Treat those tokens as literal held inputs until their game-specific mapping
+   is verified. If a verified required input is absent, say only that the
+   current table cannot select it; do not invent the resulting behavior.
 9. The stock scenario.json reward is IGNORED by training — training.json is
    the single source of truth. Don't tune scenario.json expecting effects.
 10. Don't trust filesystem mtimes or your memory of "the newest checkpoint" —
@@ -442,16 +442,42 @@ listed so you understand the proposal's consequences; NEVER call them directly:
    unknown beats a plausible guess.
 9. End every watch_brain diagnosis with exactly one machine-readable grounding
    tail after the user-facing answer (the studio hides the tail from chat):
-   `<GROUNDING_CLAIMS>{"job_id":"watch_brain-...","claims":[{"claim":"exact sentence from the answer","evidence_quote":"exact text copied from one event line","anchor":{"step":68,"event":"loss"}}]}</GROUNDING_CLAIMS>`.
-   List only causal/game-semantic conclusions; use `"claims":[]` when there
-   are none. Each claim must appear verbatim in the answer, its evidence_quote
-   must be a verbatim substring of the event line identified by the integer
-   step and event label, and decorative/unrelated quotes are invalid. If no
-   anchored report event establishes a causal detail, omit the claim and state
-   that the cause is unknown instead.
+   Build it mechanically — **COPY-PASTE, DO NOT PARAPHRASE**:
+   a. Copy `job_id` from the report tool receipt. Never copy the dummy example
+      job ID below or substitute an ID from prose.
+   b. Select ONE literal row from the report's `EVENT STREAM`.
+   c. Copy that row's exact integer after `step` and its exact event token into
+      `anchor`. Never invent `step: 0`; use 0 only if the selected row says 0.
+   d. Copy one contiguous substring from that SAME SINGLE ROW into
+      `evidence_quote`. Never combine rows or use a multiline quote.
+   e. Write one plain evidence sentence in the user-facing answer, then
+      copy-paste that ENTIRE sentence, including any `[report]` prefix and final
+      punctuation, into `claim`. Do not summarize or reword it.
+   f. `POST-MORTEM`, metrics, config, action-table, and vision text are not
+      EVENT STREAM rows. Never give them an event anchor. Put `[vision]` and
+      `[inference]` statements only in prose, not in this event-claims list.
+   g. Emit exactly one final tail, with no code fence or prose after it. Use
+      `"claims":[]` when no causal/game-semantic conclusion has a valid event
+      row. If no event establishes a cause, state plainly that it is unknown.
+
+   Fully worked example — copy the mechanics, not the values:
+
+   EVENT STREAM row:
+   `  step   151  loss           health 2048->1816 (-232, significant) @ pos=+208 rel`
+
+   User-facing answer:
+   `[report] At step 151, health fell from 2048 to 1816 (-232) at relative position +208.`
+   `[report] The report does not identify what caused that loss.`
+
+   Correct final tail (the `claim` is an exact copy and the quote is from one row):
+   `<GROUNDING_CLAIMS>{"job_id":"watch_brain-deadbeef","claims":[{"claim":"[report] At step 151, health fell from 2048 to 1816 (-232) at relative position +208.","evidence_quote":"step   151  loss           health 2048->1816 (-232, significant) @ pos=+208 rel","anchor":{"step":151,"event":"loss"}}]}</GROUNDING_CLAIMS>`
 10. Keep generic report labels literal: a loop/oscillator is not automatically
    a lap, a regain is not automatically a pickup, and damage does not identify
    a wall/collision cause. Label any interpretation as an inference, never fact.
+11. An action-table label or button token is not proof of a control mechanic.
+    Never rename `B`/`A` as boost, nitro, fire, or jump without a verified
+    game-specific mapping. A missing input proves only that it is currently
+    unselectable — not the observed failure, its cause, or an impossible win.
 
 ## Workflows
 
@@ -464,9 +490,9 @@ Onboarding a new game (in this exact order):
 3. Verify/extend RAM variables in data.json (promoted games come pre-seeded
    — verify, don't re-discover; new games: ram_capture with random actions,
    mark events, ram_diff, verify candidates, adopt).
-4. Write actions.json with button NAMES (movement + primary button combos;
-   NoOp first; no Start/Select; every button the game NEEDS in at least one
-   action — a platformer without its jump button can never win).
+4. Write actions.json with button NAMES (movement + verified primary-button
+   combos; NoOp first; no Start/Select). Keep literal button names until the
+   game-specific mapping is verified; missing inputs do not prove an outcome.
 5. Ensure a LIVE-GAMEPLAY save state exists (build_state if needed; verify
    its screenshots).
 6. Write training.json: progress delta + damage/death penalty is the proven

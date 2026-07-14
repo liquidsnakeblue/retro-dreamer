@@ -14,7 +14,7 @@ const API = '/api/copilot'
 type TextEv = {
   seq: number
   ts: number
-  kind: 'user' | 'assistant' | 'tool' | 'meta' | 'raw' | 'grounding-warning'
+  kind: 'user' | 'assistant' | 'tool' | 'meta' | 'raw' | 'grounding-warning' | 'grounding-audit'
   text: string
   detail?: string // full auxiliary detail (for example tool input or warning evidence)
 }
@@ -351,13 +351,26 @@ function EventRow({
   if (e.kind === 'grounding-warning') {
     const warning = e.text.replace(/^Grounding(?: vocabulary)? telemetry:\s*/i, '')
     return (
-      <div
-        className="px-3 py-1 text-[10px] text-retro-text-dim"
-        title={e.detail || e.text}
-      >
-        <span className="font-semibold text-retro-warning">[⚠ grounding telemetry]</span>{' '}
-        {warning}
-      </div>
+      <details className="px-3 py-1 text-[10px] text-retro-text-dim group">
+        <summary className="cursor-pointer list-none select-none hover:text-retro-text">
+          <span className="inline-block w-3 transition-transform group-open:rotate-90">▸</span>
+          <span className="font-semibold text-retro-warning">[⚠ grounding telemetry]</span>{' '}
+          {warning}
+        </summary>
+        {e.detail && <AuditDetail detail={e.detail} />}
+      </details>
+    )
+  }
+  if (e.kind === 'grounding-audit') {
+    return (
+      <details className="px-3 py-1 text-[10px] text-retro-text-dim group">
+        <summary className="cursor-pointer font-mono list-none select-none hover:text-retro-text">
+          <span className="inline-block w-3 transition-transform group-open:rotate-90">▸</span>
+          <span className="font-semibold text-retro-accent">[grounding claims]</span>{' '}
+          {e.text.replace(/^Grounding audit\s*·\s*/i, '')}
+        </summary>
+        <AuditDetail detail={e.detail || 'No raw claims tail was retained.'} />
+      </details>
     )
   }
   if (e.kind === 'tool') return <ToolRow e={e} />
@@ -369,6 +382,14 @@ function EventRow({
     raw: 'text-retro-text-dim font-mono text-[10px] whitespace-pre-wrap',
   }
   return <div className={`px-3 py-2 rounded text-xs ${style[e.kind]}`}>{text}</div>
+}
+
+function AuditDetail({ detail }: { detail: string }) {
+  return (
+    <pre className="mt-1.5 ml-4 p-2 rounded bg-retro-surface font-mono text-[10px] whitespace-pre-wrap break-all overflow-x-auto max-h-64 overflow-y-auto">
+      {detail}
+    </pre>
+  )
 }
 
 /** One-line tool call, expandable when we have (or can recover) the full input.

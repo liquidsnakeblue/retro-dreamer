@@ -31,6 +31,7 @@ PROXY_SCRIPT = Path.home() / "lmstudio-proxy" / "proxy.py"
 PROXY_ENV = Path.home() / "lmstudio-proxy" / ".env"
 STUDIO_STATE_START = "<STUDIO_STATE>"
 STUDIO_STATE_END = "</STUDIO_STATE>"
+GROUNDING_AUDIT_ROOT = PROJECT_ROOT / "training-state" / "tools"
 
 router = APIRouter(prefix="/api/copilot")
 
@@ -229,6 +230,33 @@ def _split_grounding_claims(text: str) -> tuple[str, Optional[dict], Optional[st
     except json.JSONDecodeError as exc:
         return visible, None, f"claims JSON is invalid: {exc.msg}"
     return visible, payload, None
+
+
+def _raw_grounding_tail(text: str) -> Optional[str]:
+    """Return the exact model-authored claims tail for audit display."""
+    start = text.find(GROUNDING_CLAIMS_START)
+    return text[start:] if start >= 0 else None
+
+
+def _append_grounding_audit(record: dict) -> Optional[str]:
+    """Append a job-keyed grounding audit without breaking the copilot stream."""
+    try:
+        audit_path = (
+            GROUNDING_AUDIT_ROOT
+            / record["job_id"]
+            / "grounding-audit.jsonl"
+        )
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        with audit_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(
+                record,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ))
+            handle.write("\n")
+    except OSError as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
 
 
 def _report_event_lines(report_text: str) -> dict[tuple[int, str], list[str]]:
@@ -469,6 +497,7 @@ def _reader(proc: subprocess.Popen):
     turn_payloads = []
     turn_payload_positions = []
     turn_parse_errors = []
+    turn_raw_claim_tails = []
     turn_bash_uses = {}
     turn_assistant_position = -1
     turn_start_serve_seq = _serve_sequence()
@@ -488,6 +517,9 @@ def _reader(proc: subprocess.Popen):
                     turn_assistant_position += 1
                     text = block["text"]
                     visible, payload, parse_error = _split_grounding_claims(text)
+                    raw_claim_tail = _raw_grounding_tail(text)
+                    if raw_claim_tail is not None:
+                        turn_raw_claim_tails.append(raw_claim_tail)
                     turn_texts.append(visible)
                     if payload is not None:
                         turn_payloads.append(payload)
@@ -541,14 +573,62 @@ def _reader(proc: subprocess.Popen):
                     ):
                         turn_job_ids.add(job_id)
         elif t == "result":
-            for warning in _turn_grounding_warnings(
+            warnings = _turn_grounding_warnings(
                 turn_texts,
                 turn_job_ids,
                 turn_payloads,
                 turn_parse_errors,
                 turn_payload_positions,
                 turn_assistant_position,
-            ):
+            )
+            diagnosis_text = "\n".join(text for text in turn_texts if text)
+            claimed_job_ids = {
+                payload["job_id"]
+                for payload in turn_payloads
+                if isinstance(payload, dict)
+                and isinstance(payload.get("job_id"), str)
+            }
+            raw_detail = (
+                "\n\n".join(turn_raw_claim_tails)
+                if turn_raw_claim_tails
+                else "No GROUNDING_CLAIMS tail was emitted."
+            )
+            # Only a same-turn, server-verified report receipt may choose the
+            # persistence path. Model-authored payload IDs remain audit data.
+            for job_id in sorted(turn_job_ids):
+                record = {
+                    "schema_version": 1,
+                    "ts": time.time(),
+                    "job_id": job_id,
+                    "claimed_job_ids": sorted(claimed_job_ids),
+                    "diagnosis_text": diagnosis_text,
+                    "raw_claims_tail": (
+                        turn_raw_claim_tails[0]
+                        if len(turn_raw_claim_tails) == 1
+                        else None
+                    ),
+                    "raw_claims_tails": list(turn_raw_claim_tails),
+                    "warnings": warnings,
+                }
+                persistence_error = _append_grounding_audit(record)
+                _emit(
+                    "grounding-audit",
+                    f"Grounding audit · {job_id} · {len(warnings)} warning(s)",
+                    detail=raw_detail,
+                )
+                if persistence_error:
+                    _emit(
+                        "grounding-warning",
+                        "Grounding telemetry: audit persistence failed",
+                        detail=f"{job_id}: {persistence_error}",
+                    )
+            if not turn_job_ids and turn_raw_claim_tails:
+                _emit(
+                    "grounding-audit",
+                    "Grounding audit · unassociated · not validated",
+                    detail=raw_detail,
+                )
+            for warning in warnings:
                 _emit(
                     "grounding-warning",
                     warning["message"],
@@ -561,6 +641,7 @@ def _reader(proc: subprocess.Popen):
             turn_payloads.clear()
             turn_payload_positions.clear()
             turn_parse_errors.clear()
+            turn_raw_claim_tails.clear()
             turn_bash_uses.clear()
             turn_assistant_position = -1
             turn_start_serve_seq = _serve_sequence()

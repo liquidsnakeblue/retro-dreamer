@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from functools import cache
 from pathlib import Path
@@ -243,6 +244,14 @@ class StructuredGroundingValidationTest(unittest.TestCase):
         self.assertIn("single final block", error)
         self.assertNotIn(copilot.GROUNDING_CLAIMS_START, visible)
 
+    def test_raw_grounding_tail_preserves_exact_model_text(self):
+        raw_tail = (
+            copilot.GROUNDING_CLAIMS_START + "\n{not-json}\n"
+            + copilot.GROUNDING_CLAIMS_END + "\ntrailing prose"
+        )
+        self.assertEqual(raw_tail, copilot._raw_grounding_tail("answer\n" + raw_tail))
+        self.assertIsNone(copilot._raw_grounding_tail("ordinary answer"))
+
     def test_diagnosis_turn_requires_a_claims_block(self):
         claim, _ = valid_claim_payload()
         warnings = copilot._turn_grounding_warnings([claim], {JOB_ID}, [], [])
@@ -292,6 +301,57 @@ class StructuredGroundingValidationTest(unittest.TestCase):
         self.assertEqual([], copilot._turn_grounding_warnings([text], set(), [], []))
 
 
+class PrimerGroundingContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.primer = copilot.PRIMER_PATH.read_text()
+
+    def test_primer_requires_mechanical_single_row_claim_copying(self):
+        for instruction in (
+            "COPY-PASTE, DO NOT PARAPHRASE",
+            "Never invent `step: 0`",
+            "one contiguous substring from that SAME SINGLE ROW",
+            "copy-paste that ENTIRE sentence",
+            "Never give them an event anchor",
+            "no code fence or prose after it",
+        ):
+            with self.subTest(instruction=instruction):
+                self.assertIn(instruction, self.primer)
+
+    def test_primer_worked_example_is_internally_exact(self):
+        claim = (
+            "[report] At step 151, health fell from 2048 to 1816 (-232) "
+            "at relative position +208."
+        )
+        quote = (
+            "step   151  loss           health 2048->1816 "
+            "(-232, significant) @ pos=+208 rel"
+        )
+        self.assertEqual(2, self.primer.count(claim))
+        self.assertEqual(2, self.primer.count(quote))
+        self.assertIn(
+            '"anchor":{"step":151,"event":"loss"}',
+            self.primer,
+        )
+
+    def test_primer_keeps_controls_literal_until_mapping_is_verified(self):
+        self.assertIn(
+            "Never rename `B`/`A` as boost, nitro, fire, or jump",
+            self.primer,
+        )
+        self.assertIn(
+            "not the observed failure, its cause, or an impossible win",
+            self.primer,
+        )
+
+    def test_primer_preserves_two_frame_vision_contract(self):
+        self.assertEqual(2, self.primer.count("exactly 2 frames"))
+        self.assertEqual(2, self.primer.count(
+            "frame checks may rely on scene/color perception but NEVER on "
+            "reading fine in-frame text."
+        ))
+
+
 class CopilotGroundingReaderTest(unittest.TestCase):
     def setUp(self):
         self.old_events = copilot._events
@@ -299,11 +359,14 @@ class CopilotGroundingReaderTest(unittest.TestCase):
         self.old_reports = copilot._served_reports
         self.old_report_meta = copilot._served_report_meta
         self.old_report_seq = copilot._served_report_seq
+        self.old_audit_root = copilot.GROUNDING_AUDIT_ROOT
+        self.audit_tmp = tempfile.TemporaryDirectory()
         copilot._events = []
         copilot._seq = 0
         copilot._served_reports = {}
         copilot._served_report_meta = {}
         copilot._served_report_seq = 0
+        copilot.GROUNDING_AUDIT_ROOT = Path(self.audit_tmp.name)
 
     def tearDown(self):
         copilot._events = self.old_events
@@ -311,6 +374,18 @@ class CopilotGroundingReaderTest(unittest.TestCase):
         copilot._served_reports = self.old_reports
         copilot._served_report_meta = self.old_report_meta
         copilot._served_report_seq = self.old_report_seq
+        copilot.GROUNDING_AUDIT_ROOT = self.old_audit_root
+        self.audit_tmp.cleanup()
+
+    def _audit_records(self, job_id=JOB_ID):
+        path = (
+            Path(self.audit_tmp.name)
+            / job_id
+            / "grounding-audit.jsonl"
+        )
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines()]
 
     def _run_reader(
         self,
@@ -386,6 +461,114 @@ class CopilotGroundingReaderTest(unittest.TestCase):
         assistant = [e for e in copilot._events if e["kind"] == "assistant"][0]
         self.assertEqual(claim, assistant["text"])
         self.assertIn(copilot.GROUNDING_CLAIMS_START, assistant["detail"])
+        audits = [e for e in copilot._events if e["kind"] == "grounding-audit"]
+        self.assertEqual(1, len(audits))
+        self.assertIn(JOB_ID, audits[0]["text"])
+        self.assertEqual(
+            raw[raw.index(copilot.GROUNDING_CLAIMS_START):],
+            audits[0]["detail"],
+        )
+        records = self._audit_records()
+        self.assertEqual(1, len(records))
+        self.assertEqual(JOB_ID, records[0]["job_id"])
+        self.assertEqual([], records[0]["warnings"])
+        self.assertEqual(audits[0]["detail"], records[0]["raw_claims_tail"])
+
+    def test_reader_audits_payload_only_tail(self):
+        payload = {"job_id": JOB_ID, "claims": []}
+        raw_tail = (
+            copilot.GROUNDING_CLAIMS_START + json.dumps(payload)
+            + copilot.GROUNDING_CLAIMS_END
+        )
+        self._run_reader(raw_tail)
+        audits = [e for e in copilot._events if e["kind"] == "grounding-audit"]
+        self.assertEqual(1, len(audits))
+        self.assertEqual(raw_tail, audits[0]["detail"])
+        self.assertFalse(any(e["kind"] == "assistant" for e in copilot._events))
+        self.assertEqual(raw_tail, self._audit_records()[0]["raw_claims_tail"])
+
+    def test_reader_surfaces_unassociated_tail_without_trusting_its_job_id(self):
+        raw_tail = (
+            copilot.GROUNDING_CLAIMS_START
+            + json.dumps({"job_id": LM_JOB_ID, "claims": []})
+            + copilot.GROUNDING_CLAIMS_END
+        )
+        self._run_reader(raw_tail, include_job=False)
+        audit = next(e for e in copilot._events if e["kind"] == "grounding-audit")
+        self.assertIn("unassociated", audit["text"])
+        self.assertEqual(raw_tail, audit["detail"])
+        self.assertEqual([], self._audit_records(LM_JOB_ID))
+
+    def test_reader_retains_per_warning_detail_next_to_raw_tail(self):
+        claim, payload = valid_claim_payload()
+        payload["claims"][0]["claim"] = "Paraphrased health-loss claim."
+        raw = (
+            claim + "\n" + copilot.GROUNDING_CLAIMS_START
+            + json.dumps(payload) + copilot.GROUNDING_CLAIMS_END
+        )
+        self._run_reader(raw)
+        warnings = [e for e in copilot._events if e["kind"] == "grounding-warning"]
+        self.assertTrue(any(
+            "not an exact diagnosis sentence" in event["text"]
+            and event["detail"] == "Paraphrased health-loss claim."
+            for event in warnings
+        ))
+        audit = next(e for e in copilot._events if e["kind"] == "grounding-audit")
+        self.assertIn('"claim": "Paraphrased health-loss claim."', audit["detail"])
+        record = self._audit_records()[0]
+        self.assertEqual(warnings[0]["detail"], record["warnings"][0]["detail"])
+
+    def test_reader_audits_malformed_tail_exactly(self):
+        raw_tail = copilot.GROUNDING_CLAIMS_START + "\n{not-json}\n"
+        self._run_reader("Visible diagnosis.\n" + raw_tail)
+        record = self._audit_records()[0]
+        self.assertEqual(raw_tail, record["raw_claims_tail"])
+        self.assertTrue(any(
+            "claims block could not be parsed" in warning["message"]
+            for warning in record["warnings"]
+        ))
+
+    def test_reader_keys_audit_by_served_report_not_claimed_job(self):
+        claim, payload = valid_claim_payload()
+        payload["job_id"] = LM_JOB_ID
+        raw = (
+            claim + "\n" + copilot.GROUNDING_CLAIMS_START
+            + json.dumps(payload) + copilot.GROUNDING_CLAIMS_END
+        )
+        self._run_reader(raw)
+        records = self._audit_records()
+        self.assertEqual([LM_JOB_ID], records[0]["claimed_job_ids"])
+        self.assertEqual([], self._audit_records(LM_JOB_ID))
+
+    def test_reader_appends_one_audit_record_per_diagnosis(self):
+        claim, payload = valid_claim_payload()
+        raw = (
+            claim + "\n" + copilot.GROUNDING_CLAIMS_START
+            + json.dumps(payload) + copilot.GROUNDING_CLAIMS_END
+        )
+        self._run_reader(raw)
+        self._run_reader(raw)
+        self.assertEqual(2, len(self._audit_records()))
+
+    def test_reader_reports_audit_persistence_failure_without_stopping(self):
+        blocked = Path(self.audit_tmp.name) / "blocked"
+        blocked.write_text("not a directory")
+        copilot.GROUNDING_AUDIT_ROOT = blocked
+        claim, payload = valid_claim_payload()
+        raw = (
+            claim + "\n" + copilot.GROUNDING_CLAIMS_START
+            + json.dumps(payload) + copilot.GROUNDING_CLAIMS_END
+        )
+        self._run_reader(raw)
+        self.assertTrue(any(
+            event["kind"] == "grounding-warning"
+            and "audit persistence failed" in event["text"]
+            for event in copilot._events
+        ))
+        self.assertTrue(any(
+            event["kind"] == "grounding-audit"
+            for event in copilot._events
+        ))
 
     def test_reader_emits_nonblocking_telemetry_for_missing_claims(self):
         claim, _ = valid_claim_payload()
@@ -393,6 +576,9 @@ class CopilotGroundingReaderTest(unittest.TestCase):
         warnings = [e for e in copilot._events if e["kind"] == "grounding-warning"]
         self.assertTrue(any("omitted structured claims" in e["text"] for e in warnings))
         self.assertTrue(any(e["kind"] == "assistant" for e in copilot._events))
+        records = self._audit_records()
+        self.assertEqual([], records[0]["raw_claims_tails"])
+        self.assertTrue(records[0]["warnings"])
 
     def test_reader_does_not_check_planner_text_without_a_report_job(self):
         self._run_reader(
@@ -409,6 +595,7 @@ class CopilotGroundingReaderTest(unittest.TestCase):
         self.assertNotIn(
             "grounding-warning", [event["kind"] for event in copilot._events]
         )
+        self.assertEqual([], self._audit_records())
         copilot._events.clear()
         self._run_reader("The brain sped into a wall.", failed_result=True)
         self.assertNotIn(
