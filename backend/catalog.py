@@ -96,6 +96,10 @@ def close_orphaned_sessions(con) -> int:
 def get_resumable_head(con, game_id: str, lineage_name: str = None) -> Optional[sqlite3.Row]:
     """Newest existing resume snapshot of the game's active (or named) lineage.
 
+    Session recency takes precedence over the step counter. A fresh session
+    starts its counter over, so ordering every snapshot in the lineage by step
+    can incorrectly select an older brain with a larger absolute step.
+
     Skips snapshots whose checkpoint file has vanished (rolling keep-N) so a
     stale row can never resolve to a missing file.
     """
@@ -118,7 +122,8 @@ def get_resumable_head(con, game_id: str, lineage_name: str = None) -> Optional[
     for snap in con.execute(
         """SELECT s.* FROM snapshots s JOIN sessions sess ON s.session_id=sess.id
            WHERE sess.lineage_id=? AND s.kind='resume'
-           ORDER BY s.step DESC""",
+           ORDER BY sess.started_at IS NULL, sess.started_at DESC, sess.id DESC,
+                    s.step DESC, s.created_at DESC, s.id DESC""",
         (lineage_id,),
     ):
         if Path(snap["checkpoint_path"]).exists():
