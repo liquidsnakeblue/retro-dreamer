@@ -102,6 +102,16 @@ C. `watch_brain` on LittleMermaid returns a report the copilot quotes accurately
 D. Engine regression test green on the three frozen fixtures.
 E. Copilot answers "how is the brain doing at <game>" using watch_brain + modal metrics,
    every claim traceable to a report line.
+F. **Product-harness vision check** (added 2026-07-14 after the Pam vision test): the resident
+   copilot session (claude-local via the :8082 image-fix proxy — backend/copilot.py) is asked
+   to view and describe `scratch/vision-test/frame_c.png` and `frame_e.png`; god scores against
+   the pre-registered ground truth (frame_c = Ariel centered in open water, 3/5 hearts;
+   frame_e = pure black). PASS required before the primer mentions the frame/vision fallback.
+   If F fails, ship Phase 4 with the primer's watch-the-brain reflex REPORT-ONLY (no vision
+   language) and file the pipe fix as a follow-up card. Context: the hive-harness test proved
+   qwen-code→hive-proxy drops images entirely (docs/pam-vision-test.md — Pam correctly reported
+   IMAGE NOT VISIBLE ×5, zero confabulation); the product path is separate and vision-capable
+   by design, but was never verified E2E.
 
 ## Non-goals (defer; do not build)
 
