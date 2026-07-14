@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SHEEPRL_DIR = PROJECT_ROOT / "sheeprl"
@@ -39,7 +39,9 @@ def _run_job(job_id: str, cmd: list, cwd: Path):
     env = os.environ.copy()
     env.setdefault("PYOPENGL_PLATFORM", "egl")
     env.setdefault("PYGLET_HEADLESS", "1")
-    env.setdefault("CUDA_VISIBLE_DEVICES", "")  # tools are CPU-only, never fight training
+    # Tools are CPU-only, even when the server itself was launched with a GPU
+    # selection in its environment. setdefault() would leak that selection.
+    env["CUDA_VISIBLE_DEVICES"] = ""
     try:
         with open(log_path, "w") as logf:
             proc = subprocess.Popen(
@@ -69,8 +71,13 @@ def _run_job(job_id: str, cmd: list, cwd: Path):
             job["ended_at"] = time.time()
 
 
-def submit(tool: str, cmd: list, cwd: Path = SHEEPRL_DIR) -> str:
-    job_id = f"{tool}-{uuid.uuid4().hex[:8]}"
+def submit(
+    tool: str,
+    cmd: list,
+    cwd: Path = SHEEPRL_DIR,
+    job_id: Optional[str] = None,
+) -> str:
+    job_id = job_id or f"{tool}-{uuid.uuid4().hex[:8]}"
     job_dir = JOBS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     _jobs[job_id] = {
@@ -158,6 +165,78 @@ def ram_capture(req: RamCaptureReq):
         PYTHON, str(SHEEPRL_DIR / "_retro_ram_capture.py"),
         ckpt, req.state, str(req.steps), str(out),
     ])}
+
+
+class WatchBrainReq(BaseModel):
+    game_id: str
+    state: str
+    steps: int = Field(default=1400, ge=1, le=100_000)
+    checkpoint: str = "latest"
+
+
+@router.post("/watch_brain")
+def watch_brain(req: WatchBrainReq):
+    """Replay one game-scoped brain and turn its RAM trace into a report."""
+    game_dir = _game_dir(req.game_id)  # 404 for an unknown/non-custom game
+
+    training_config = game_dir / "training.json"
+    try:
+        parsed_training = json.loads(training_config.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            409, f"game '{req.game_id}' has no valid training.json: {exc}"
+        ) from exc
+    if not isinstance(parsed_training, dict):
+        raise HTTPException(
+            409, f"game '{req.game_id}' has no valid training.json object"
+        )
+
+    available_states = {
+        path.stem for path in (game_dir / "states").glob("*.state")
+    }
+    if req.state not in available_states:
+        raise HTTPException(
+            404, f"state '{req.state}' not found for game '{req.game_id}'"
+        )
+
+    checkpoint = req.checkpoint
+    if checkpoint == "latest":
+        from backend import catalog as _catalog
+
+        con = _catalog.connect()
+        try:
+            head = _catalog.get_resumable_head(con, req.game_id)
+        finally:
+            con.close()
+        if not head or not head["checkpoint_path"]:
+            raise HTTPException(
+                409, f"no resumable checkpoint for game '{req.game_id}'"
+            )
+        checkpoint = head["checkpoint_path"]
+    elif not Path(checkpoint).is_file():
+        raise HTTPException(404, f"checkpoint not found: {checkpoint}")
+
+    # Preselect the managed job id so output.log and both artifacts live in
+    # one directory owned by the existing job manager.
+    job_id = f"watch_brain-{uuid.uuid4().hex[:8]}"
+    job_dir = JOBS_DIR / job_id
+    npz_path = job_dir / "capture.npz"
+    report_path = job_dir / "report.txt"
+    cmd = [
+        PYTHON,
+        str(PROJECT_ROOT / "backend" / "watch_brain_job.py"),
+        str(checkpoint),
+        req.state,
+        str(req.steps),
+        str(npz_path),
+        str(training_config),
+        str(report_path),
+    ]
+    return {
+        "job_id": submit(
+            "watch_brain", cmd, cwd=PROJECT_ROOT, job_id=job_id
+        )
+    }
 
 
 class RamDiffBoundaryReq(BaseModel):
