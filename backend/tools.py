@@ -210,12 +210,31 @@ class RecordReq(BaseModel):
 
 @router.post("/record_episode")
 def record_episode(req: RecordReq):
+    # game_id was previously accepted but IGNORED: the recorder inferred the
+    # game from the checkpoint, and checkpoint="latest" resolved GLOBALLY
+    # (catalog watch-head, else a cross-game mtime scan), so a caller asking
+    # to record game A could silently record game B's brain. Honor game_id:
+    # validate the game exists, and scope "latest" to THAT game's head.
+    _game_dir(req.game_id)  # 404 if no custom integration dir
+    ckpt = req.checkpoint
+    if ckpt == "latest":
+        from backend import catalog as _catalog
+        con = _catalog.connect()
+        try:
+            head = _catalog.get_resumable_head(con, req.game_id)
+        finally:
+            con.close()
+        if not head or not head["checkpoint_path"]:
+            raise HTTPException(
+                409, f"no resumable checkpoint for game '{req.game_id}'"
+            )
+        ckpt = head["checkpoint_path"]
     job_id = f"record-{uuid.uuid4().hex[:6]}"
     out = JOBS_DIR / job_id
     out.mkdir(parents=True, exist_ok=True)
     return {"job_id": submit("record_episode", [
         PYTHON, str(SHEEPRL_DIR / "_retro_record.py"),
-        req.checkpoint, str(req.seconds), str(out / "episode.mp4"), req.state,
+        ckpt, str(req.seconds), str(out / "episode.mp4"), req.state,
     ])}
 
 
