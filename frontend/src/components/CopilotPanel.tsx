@@ -78,7 +78,9 @@ export function CopilotPanel({
   const [approvalReady, setApprovalReady] = useState(false)
   const [approvalError, setApprovalError] = useState<string | null>(null)
   const [proposalActions, setProposalActions] = useState<Record<string, ProposalAction>>({})
+  const [latestProposalGeneration, setLatestProposalGeneration] = useState(0)
   const lastSeq = useRef(0)
+  const eventsPollInFlight = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const initializeApprovalSession = useCallback(async (signal?: AbortSignal) => {
@@ -110,6 +112,8 @@ export function CopilotPanel({
 
   useEffect(() => {
     const t = setInterval(async () => {
+      if (eventsPollInFlight.current) return
+      eventsPollInFlight.current = true
       try {
         const d = await fetch(`${API}/events?since=${lastSeq.current}`).then((r) => r.json())
         setRunning(d.running)
@@ -120,14 +124,23 @@ export function CopilotPanel({
           lastSeq.current = 0
           setEvents([])
           setProposalActions({})
+          setLatestProposalGeneration(0)
           return
         }
         if (d.events?.length) {
           lastSeq.current = d.last_seq
+          const proposalGenerations = d.events
+            .filter((event: Ev) => event.kind === 'proposal' && isTrainingStartProposal(event.proposal))
+            .map((event: ProposalEv) => (event.proposal as TrainingStartProposal).generation)
+          if (proposalGenerations.length) {
+            setLatestProposalGeneration((current) => Math.max(current, ...proposalGenerations))
+          }
           setEvents((prev) => [...prev, ...d.events].slice(-400))
         }
       } catch {
         /* server restart etc. */
+      } finally {
+        eventsPollInFlight.current = false
       }
     }, 1000)
     return () => clearInterval(t)
@@ -173,8 +186,13 @@ export function CopilotPanel({
     }
   }
 
-  function proposalAction(id: string): ProposalAction {
-    return proposalActions[id] || { status: 'pending' }
+  function proposalAction(proposal: TrainingStartProposal): ProposalAction {
+    const action = proposalActions[proposal.id] || { status: 'pending' }
+    const terminal = ['confirmed', 'cancelled', 'superseded', 'stale', 'expired'].includes(action.status)
+    if (!terminal && proposal.generation < latestProposalGeneration) {
+      return { status: 'superseded' }
+    }
+    return action
   }
 
   function updateProposalAction(id: string, action: ProposalAction) {
@@ -194,7 +212,15 @@ export function CopilotPanel({
         res = await request()
       }
       const response = await readJson(res)
-      if (!res.ok) throw new Error(apiError(response, res.status))
+      if (!res.ok) {
+        const message = apiError(response, res.status)
+        const terminal = terminalProposalStatus(res.status, message)
+        if (terminal) {
+          updateProposalAction(proposal.id, { status: terminal })
+          return
+        }
+        throw new Error(message)
+      }
 
       if (action === 'cancel') {
         updateProposalAction(proposal.id, { status: 'cancelled' })
@@ -308,7 +334,7 @@ interface EventRowProps {
   e: Ev
   approvalReady: boolean
   approvalError: string | null
-  proposalAction: (id: string) => ProposalAction
+  proposalAction: (proposal: TrainingStartProposal) => ProposalAction
   onConfirm: (proposal: TrainingStartProposal) => void
   onCancel: (proposal: TrainingStartProposal) => void
 }
@@ -333,7 +359,7 @@ function EventRow({
     return (
       <TrainingProposalCard
         proposal={proposal}
-        action={proposalAction(proposal.id)}
+        action={proposalAction(proposal)}
         approvalReady={approvalReady}
         approvalError={approvalError}
         onConfirm={() => onConfirm(proposal)}
@@ -453,4 +479,18 @@ function apiError(value: unknown, status: number): string {
     if (typeof detail === 'string') return detail
   }
   return `Broker request failed (HTTP ${status})`
+}
+
+function terminalProposalStatus(
+  httpStatus: number,
+  message: string,
+): 'confirmed' | 'cancelled' | 'superseded' | 'stale' | 'expired' | null {
+  if (httpStatus !== 409) return null
+  const normalized = message.toLowerCase()
+  if (normalized.includes('superseded')) return 'superseded'
+  if (normalized.includes('stale')) return 'stale'
+  if (normalized.includes('expired')) return 'expired'
+  if (normalized.includes('already confirmed')) return 'confirmed'
+  if (normalized.includes('already cancelled')) return 'cancelled'
+  return null
 }

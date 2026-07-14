@@ -121,6 +121,7 @@ class TrainingPlanner:
         self.plan_ttl = plan_ttl
         self.approval_ttl = approval_ttl
         self._plans: dict[str, _StoredPlan] = {}
+        self._plan_generation = 0
         self._approval_sessions: dict[str, float] = {}
         self._lock = threading.Lock()
 
@@ -215,6 +216,9 @@ class TrainingPlanner:
         }
         route = "/api/training/switch" if switching else "/api/training/start"
         mode = "switch" if switching else ("resume" if resume else "new")
+        launch_strategy = (
+            "resume" if resume else ("fresh" if options.fresh_start else "new")
+        )
         consequences = self._consequences(
             mode=mode,
             resume=resume,
@@ -238,6 +242,7 @@ class TrainingPlanner:
         proposal = {
             "type": "training_start_proposal",
             "id": plan_id,
+            "generation": 0,
             "studio_revision": studio["revision"],
             "created_at": _iso(now),
             "expires_at": _iso(now + self.plan_ttl),
@@ -246,6 +251,12 @@ class TrainingPlanner:
                 "display_name": focused.get("display_name") or options.game_id,
             },
             "mode": mode,
+            "launch": {
+                "strategy": launch_strategy,
+                "initial_state": initial_state,
+                "fresh_start": options.fresh_start,
+            },
+            "superseded_plan_ids": [],
             "head": head_summary,
             "model": {"size": effective["model_size"]},
             "states": selected_states,
@@ -258,18 +269,39 @@ class TrainingPlanner:
             "warnings": warnings,
             "exact_request": {"route": route, "body": copy.deepcopy(body)},
         }
-        payload = _PlanPayload(
-            plan_id=plan_id,
-            game_id=options.game_id,
-            studio_revision=studio["revision"],
-            created_at=now,
-            expires_at=now + self.plan_ttl,
-            proposal_json=_canonical(proposal),
-            exact_request_json=_canonical({"route": route, "body": body}),
-        )
         with self._lock:
             if plan_id in self._plans:
                 raise PlannerError(500, "plan id collision")
+            if any(
+                stored.status in {"validating", "confirming"}
+                for stored in self._plans.values()
+            ):
+                # Serialize proposal replacement against confirmation. Either
+                # the old approval claims first and finishes, or this new plan
+                # lands first and makes every old pending card non-actionable.
+                raise PlannerError(409, "a training plan confirmation is already in progress")
+            pending = [
+                stored for stored in self._plans.values()
+                if stored.status == "pending"
+            ]
+            superseded_plan_ids = [stored.payload.plan_id for stored in pending]
+            candidate_generation = self._plan_generation + 1
+            proposal["generation"] = candidate_generation
+            proposal["superseded_plan_ids"] = superseded_plan_ids
+            # Serialize the complete replacement before mutating any shared
+            # status. A failed candidate must leave the active plan untouched.
+            payload = _PlanPayload(
+                plan_id=plan_id,
+                game_id=options.game_id,
+                studio_revision=studio["revision"],
+                created_at=now,
+                expires_at=now + self.plan_ttl,
+                proposal_json=_canonical(proposal),
+                exact_request_json=_canonical({"route": route, "body": body}),
+            )
+            for stored in pending:
+                stored.status = "superseded"
+            self._plan_generation = candidate_generation
             self._plans[plan_id] = _StoredPlan(payload=payload)
         return json.loads(payload.proposal_json)
 

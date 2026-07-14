@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi import Response
+from pydantic import ValidationError
 
 from backend import copilot
 from backend.api import routes
@@ -125,7 +126,14 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
     async def test_new_plan_uses_code_presets_and_is_immutable(self):
         proposal = self.planner.create_plan({"game_id": "Focus-Game"})
         self.assertEqual(proposal["type"], "training_start_proposal")
+        self.assertEqual(proposal["generation"], 1)
+        self.assertEqual(proposal["superseded_plan_ids"], [])
         self.assertEqual(proposal["mode"], "new")
+        self.assertEqual(proposal["launch"], {
+            "strategy": "new",
+            "initial_state": "start",
+            "fresh_start": False,
+        })
         self.assertEqual(proposal["model"], {"size": "medium"})
         self.assertEqual(proposal["num_envs"], 8)
         self.assertEqual(proposal["batch_size"], 16)
@@ -152,10 +160,40 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[0][1]["model_size"], "medium")
         self.assertEqual(result["intent"], {"type": "open_tab", "tab": "metrics"})
 
+    async def test_state_rotation_override_reaches_the_stored_executor_request(self):
+        proposal = self.planner.create_plan({
+            "game_id": "Focus-Game",
+            "states": ["hard", "start"],
+        })
+        self.assertEqual(
+            [state["file"] for state in proposal["states"]],
+            ["hard", "start"],
+        )
+        self.assertEqual(proposal["launch"]["initial_state"], "hard+start")
+        self.assertEqual(
+            proposal["exact_request"]["body"]["initial_state"],
+            "hard+start",
+        )
+        token = self.planner.create_approval_session()
+        seen = []
+
+        async def execute(route, body):
+            seen.append((route, body))
+            return {"status": "started"}
+
+        await self.planner.confirm(proposal["id"], token, execute)
+        self.assertEqual(seen[0][0], "/api/training/start")
+        self.assertEqual(seen[0][1]["initial_state"], "hard+start")
+
     def test_resume_locks_every_effective_setting_from_resolved_config(self):
         self.add_head()
         proposal = self.planner.create_plan({"game_id": "Focus-Game"})
         self.assertEqual(proposal["mode"], "resume")
+        self.assertEqual(proposal["launch"], {
+            "strategy": "resume",
+            "initial_state": "start+hard",
+            "fresh_start": False,
+        })
         self.assertEqual(proposal["head"], {
             "snapshot_id": 7, "step": 12345, "lineage": "main"
         })
@@ -170,6 +208,21 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             self.planner.create_plan({"game_id": "Focus-Game", "model_size": "small"})
         with self.assertRaisesRegex(PlannerError, "states are locked"):
             self.planner.create_plan({"game_id": "Focus-Game", "states": ["start"]})
+
+    def test_explicit_fresh_plan_marks_existing_head_unused(self):
+        self.add_head()
+        proposal = self.planner.create_plan({
+            "game_id": "Focus-Game",
+            "states": ["hard"],
+            "fresh_start": True,
+        })
+        self.assertEqual(proposal["mode"], "new")
+        self.assertIsNotNone(proposal["head"])
+        self.assertEqual(proposal["launch"], {
+            "strategy": "fresh",
+            "initial_state": "hard",
+            "fresh_start": True,
+        })
 
     def test_resume_rejects_incompatible_buffer_metadata_before_proposal(self):
         self.add_head()
@@ -193,11 +246,22 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
         self.builder.state["training"] = {"state": "training", "game_id": "Other-Game"}
         proposal = self.planner.create_plan({"game_id": "Focus-Game"})
         self.assertEqual(proposal["mode"], "switch")
+        self.assertEqual(proposal["launch"]["strategy"], "new")
         self.assertEqual(proposal["exact_request"]["route"], "/api/training/switch")
         self.builder.state["training"]["game_id"] = "Focus-Game"
         with self.assertRaisesRegex(PlannerError, "already training") as caught:
             self.planner.create_plan({"game_id": "Focus-Game"})
         self.assertEqual(caught.exception.status_code, 409)
+
+    def test_switch_keeps_resume_strategy_visible(self):
+        self.add_head()
+        self.builder.state["training"] = {
+            "state": "training", "game_id": "Other-Game",
+        }
+        proposal = self.planner.create_plan({"game_id": "Focus-Game"})
+        self.assertEqual(proposal["mode"], "switch")
+        self.assertEqual(proposal["launch"]["strategy"], "resume")
+        self.assertEqual(proposal["launch"]["initial_state"], "start+hard")
 
     def test_unknown_builtin_nontrainable_and_invalid_are_rejected(self):
         self.builder.raise_missing = True
@@ -237,6 +301,86 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             await self.planner.confirm(proposal["id"], token, execute)
         self.assertEqual(calls, [])
 
+    async def test_new_plan_atomically_supersedes_the_prior_pending_plan(self):
+        first = self.planner.create_plan({"game_id": "Focus-Game"})
+        second = self.planner.create_plan({
+            "game_id": "Focus-Game", "states": ["hard"],
+        })
+        self.assertEqual(second["generation"], first["generation"] + 1)
+        self.assertEqual(second["superseded_plan_ids"], [first["id"]])
+        token = self.planner.create_approval_session()
+        calls = []
+
+        async def execute(route, body):
+            calls.append((route, body))
+            return {"status": "started"}
+
+        with self.assertRaisesRegex(PlannerError, "superseded") as denied:
+            await self.planner.confirm(first["id"], token, execute)
+        self.assertEqual(denied.exception.status_code, 409)
+        with self.assertRaisesRegex(PlannerError, "superseded"):
+            self.planner.cancel(first["id"], token)
+        self.assertEqual(calls, [])
+
+        result = await self.planner.confirm(second["id"], token, execute)
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1]["initial_state"], "hard")
+
+    async def test_superseded_status_does_not_bypass_browser_authorization(self):
+        first = self.planner.create_plan({"game_id": "Focus-Game"})
+        self.planner.create_plan({"game_id": "Focus-Game", "states": ["hard"]})
+
+        async def forbidden(_route, _body):
+            self.fail("superseded plan reached the executor")
+
+        with self.assertRaises(PlannerError) as denied:
+            await self.planner.confirm(first["id"], None, forbidden)
+        self.assertEqual(denied.exception.status_code, 403)
+
+    async def test_failed_replan_and_id_collision_leave_pending_plan_actionable(self):
+        first = self.planner.create_plan({"game_id": "Focus-Game"})
+        with self.assertRaisesRegex(PlannerError, "unknown state"):
+            self.planner.create_plan({
+                "game_id": "Focus-Game", "states": ["not-a-state"],
+            })
+        self.planner.plan_id_factory = lambda: first["id"]
+        with self.assertRaisesRegex(PlannerError, "collision"):
+            self.planner.create_plan({"game_id": "Focus-Game"})
+
+        token = self.planner.create_approval_session()
+        calls = []
+
+        async def execute(route, body):
+            calls.append((route, body))
+            return {"status": "started"}
+
+        await self.planner.confirm(first["id"], token, execute)
+        self.assertEqual(len(calls), 1)
+
+    async def test_failed_replacement_serialization_is_atomic(self):
+        first = self.planner.create_plan({"game_id": "Focus-Game"})
+        with patch(
+            "backend.training.planner._canonical",
+            side_effect=TypeError("forced serialization failure"),
+        ):
+            with self.assertRaisesRegex(TypeError, "forced serialization failure"):
+                self.planner.create_plan({
+                    "game_id": "Focus-Game", "states": ["hard"],
+                })
+        self.assertEqual(self.planner._plan_generation, first["generation"])
+        self.assertNotIn("plan-2", self.planner._plans)
+
+        token = self.planner.create_approval_session()
+        calls = []
+
+        async def execute(route, body):
+            calls.append((route, body))
+            return {"status": "started"}
+
+        await self.planner.confirm(first["id"], token, execute)
+        self.assertEqual(len(calls), 1)
+
     async def test_confirm_lock_allows_exactly_one_executor(self):
         proposal = self.planner.create_plan({"game_id": "Focus-Game"})
         token = self.planner.create_approval_session()
@@ -252,6 +396,8 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
 
         first = asyncio.create_task(self.planner.confirm(proposal["id"], token, execute))
         await entered.wait()
+        with self.assertRaisesRegex(PlannerError, "confirmation is already in progress"):
+            self.planner.create_plan({"game_id": "Focus-Game", "states": ["hard"]})
         with self.assertRaisesRegex(PlannerError, "already confirming"):
             await self.planner.confirm(proposal["id"], token, execute)
         release.set()
@@ -323,7 +469,9 @@ class TrainingPlannerRouteTest(unittest.IsolatedAsyncioTestCase):
         copilot._seq = self.old_seq
 
     async def test_route_emits_typed_proposal_and_confirm_reuses_start_semantics(self):
-        proposal = routes.plan_training(routes.TrainingPlanRequest(game_id="Focus-Game"))
+        proposal = routes.plan_training(routes.TrainingPlanRequest(
+            game_id="Focus-Game", states=["hard"],
+        ))
         event = copilot.events(0)["events"][0]
         self.assertEqual(event, {
             "seq": 1,
@@ -352,6 +500,23 @@ class TrainingPlannerRouteTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent.game_id, "Focus-Game")
         self.assertEqual(sent.model_size, "medium")
         self.assertEqual(sent.batch_length, 64)
+        self.assertEqual(sent.initial_state, "hard")
+        self.assertEqual(proposal["launch"]["initial_state"], "hard")
+
+    def test_plan_request_and_primer_expose_states_not_initial_state(self):
+        request = routes.TrainingPlanRequest(
+            game_id="Focus-Game", states=["hard"],
+        )
+        self.assertEqual(request.states, ["hard"])
+        with self.assertRaises(ValidationError):
+            routes.TrainingPlanRequest(
+                game_id="Focus-Game", initial_state="hard",
+            )
+
+        primer = copilot.PRIMER_PATH.read_text()
+        self.assertIn('"states":["BBP1"]', primer)
+        self.assertIn("Never send `initial_state` to `/training/plan`", primer)
+        self.assertIn("`metadata.json.default_state` as a launch workaround", primer)
 
 
 if __name__ == "__main__":

@@ -369,6 +369,22 @@ controls. NEVER call training start, switch, stop, plan confirm, or plan cancel
 yourself — not even after conversational approval. You do not receive the
 browser's confirmation credential.
 
+The proposal request schema is exact (`extra` fields are rejected):
+`POST /api/training/plan {"game_id":"FZero-Snes","states":["BBP1"]}`
+- Use `states`, a JSON list of exact save-state file basenames from
+  `GET /api/games/{id}`. Never send `initial_state` to `/training/plan`.
+  Multiple entries preserve order and become the per-episode `+` rotation.
+- Per-run state selection belongs in `states`. NEVER edit
+  `metadata.json.default_state` as a launch workaround.
+- `fresh_start: true` is allowed only when the human explicitly requested a
+  new model; otherwise omit it. A resumable head locks its saved state rotation,
+  so changing `states` requires an explicitly fresh plan.
+- If you revise a proposal, create a new one. The new proposal supersedes every
+  older pending card. Tell the human to confirm only the newest card after
+  checking its prominent launch state and New/Fresh/Resume label.
+- Other optional proposal fields are `model_size`, `replay_ratio`, `num_envs`,
+  `batch_size`, `batch_length`, and `resume_prefill`.
+
 The following mutation endpoints are broker implementation details. They are
 listed so you understand the proposal's consequences; NEVER call them directly:
 
