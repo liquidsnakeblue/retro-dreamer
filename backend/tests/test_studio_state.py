@@ -132,6 +132,11 @@ class StudioStateBuilderTest(unittest.TestCase):
         self.status.avg_return = 99
         self.assertEqual(compact["revision"], self.builder.build("Focus-Game")["revision"])
 
+        self.trainer.config.batch_length += 1
+        config_changed = self.builder.build("Focus-Game")
+        self.assertNotEqual(compact["revision"], config_changed["revision"])
+        self.trainer.config.batch_length -= 1
+
         self.manager.training["reward"]["variables"]["bonus"] = {"reward": 2}
         changed = self.builder.build("Focus-Game")
         self.assertNotEqual(compact["revision"], changed["revision"])

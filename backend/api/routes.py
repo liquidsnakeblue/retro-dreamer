@@ -1,8 +1,8 @@
 """REST API routes for training control, data access, and game management."""
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Cookie, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pathlib import Path
 from typing import Optional
 
@@ -12,12 +12,27 @@ router = APIRouter(prefix="/api")
 class TrainingStartRequest(BaseModel):
     model_size: str = "small"
     batch_size: Optional[int] = None
+    batch_length: Optional[int] = None
     replay_ratio: Optional[float] = None
     num_envs: Optional[int] = None
     fresh_start: bool = False
     game_id: Optional[str] = None
     initial_state: Optional[str] = None
     resume_prefill: Optional[int] = None
+
+
+class TrainingPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    game_id: str
+    model_size: Optional[str] = None
+    states: Optional[list[str]] = None
+    replay_ratio: Optional[float] = None
+    num_envs: Optional[int] = None
+    batch_size: Optional[int] = None
+    batch_length: Optional[int] = None
+    resume_prefill: Optional[int] = None
+    fresh_start: bool = False
 
 
 class CreateGameRequest(BaseModel):
@@ -30,6 +45,7 @@ class CreateGameRequest(BaseModel):
 _trainer = None
 _game_manager = None
 _studio_state_builder = None
+_training_planner = None
 
 
 def set_dependencies(trainer, game_manager):
@@ -41,6 +57,11 @@ def set_dependencies(trainer, game_manager):
 def set_studio_state_builder(builder):
     global _studio_state_builder
     _studio_state_builder = builder
+
+
+def set_training_planner(planner):
+    global _training_planner
+    _training_planner = planner
 
 
 def _invalidate_studio_state():
@@ -96,6 +117,8 @@ async def start_training(req: TrainingStartRequest):
     # Override numeric hyperparams if provided
     if req.batch_size is not None:
         config.batch_size = req.batch_size
+    if req.batch_length is not None:
+        config.batch_length = req.batch_length
     if req.replay_ratio is not None:
         config.replay_ratio = req.replay_ratio
     if req.num_envs is not None:
@@ -201,6 +224,89 @@ def studio_state(
         raise HTTPException(404, str(exc))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+def _planner_or_500():
+    if _training_planner is None:
+        raise HTTPException(500, "Training planner not initialized")
+    return _training_planner
+
+
+def _raise_planner_error(exc):
+    from backend.training.planner import PlannerError
+
+    if isinstance(exc, PlannerError):
+        raise HTTPException(exc.status_code, exc.detail) from exc
+    raise exc
+
+
+@router.post("/training/plan")
+def plan_training(req: TrainingPlanRequest):
+    """Build a read-only, immutable proposal; never mutate training here."""
+    planner = _planner_or_500()
+    try:
+        proposal = planner.create_plan(req.model_dump())
+    except Exception as exc:
+        _raise_planner_error(exc)
+    # Typed event lets the dashboard render a card without trusting model text.
+    from backend.copilot import emit_proposal
+
+    emit_proposal(proposal)
+    return proposal
+
+
+@router.post("/training/approval-session")
+def training_approval_session(response: Response):
+    """Give the browser an HttpOnly capability; never expose it to JSON/JS."""
+    from backend.training.planner import APPROVAL_COOKIE_NAME
+
+    planner = _planner_or_500()
+    token = planner.create_approval_session()
+    response.set_cookie(
+        key=APPROVAL_COOKIE_NAME,
+        value=token,
+        max_age=int(planner.approval_ttl),
+        httponly=True,
+        samesite="strict",
+        secure=False,  # Studio is intentionally served over local HTTP today.
+        path="/api/training/plans",
+    )
+    return {"status": "ready"}
+
+
+async def _execute_stored_training_request(route: str, body: dict) -> dict:
+    req = TrainingStartRequest(**body)
+    if route == "/api/training/start":
+        return await start_training(req)
+    if route == "/api/training/switch":
+        return await switch_training(req)
+    raise RuntimeError(f"planner stored unsupported route {route!r}")
+
+
+@router.post("/training/plans/{plan_id}/confirm")
+async def confirm_training_plan(
+    plan_id: str,
+    approval_token: Optional[str] = Cookie(default=None, alias="retro_training_approval"),
+):
+    planner = _planner_or_500()
+    try:
+        return await planner.confirm(
+            plan_id, approval_token, _execute_stored_training_request
+        )
+    except Exception as exc:
+        _raise_planner_error(exc)
+
+
+@router.post("/training/plans/{plan_id}/cancel")
+def cancel_training_plan(
+    plan_id: str,
+    approval_token: Optional[str] = Cookie(default=None, alias="retro_training_approval"),
+):
+    planner = _planner_or_500()
+    try:
+        return planner.cancel(plan_id, approval_token)
+    except Exception as exc:
+        _raise_planner_error(exc)
 
 
 @router.get("/workspaces")

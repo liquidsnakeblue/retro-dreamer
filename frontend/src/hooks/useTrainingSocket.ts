@@ -62,5 +62,5 @@ export function useTrainingPolling() {
     return () => clearInterval(timer)
   }, [poll])
 
-  return { connected, status, videos }
+  return { connected, status, videos, refresh: poll }
 }

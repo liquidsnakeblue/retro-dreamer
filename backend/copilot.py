@@ -35,7 +35,7 @@ router = APIRouter(prefix="/api/copilot")
 
 _lock = threading.Lock()
 _proc: Optional[subprocess.Popen] = None
-_events: list = []  # [{seq, ts, kind, text, raw?}]
+_events: list = []  # display events plus typed proposal cards
 _seq = 0
 _studio_state_builder = None
 
@@ -58,6 +58,23 @@ def _emit(kind: str, text: str, detail: str = None):
         if detail:
             ev["detail"] = detail
         _events.append(ev)
+        del _events[:-500]
+
+
+def emit_proposal(proposal: dict):
+    """Publish code-authored proposal data without routing it through Qwen."""
+    global _seq
+    # Round-trip through JSON so neither the caller nor a dashboard consumer
+    # can mutate the planner's copy by retaining a shared nested object.
+    safe_proposal = json.loads(json.dumps(proposal))
+    with _lock:
+        _seq += 1
+        _events.append({
+            "seq": _seq,
+            "ts": time.time(),
+            "kind": "proposal",
+            "proposal": safe_proposal,
+        })
         del _events[:-500]
 
 

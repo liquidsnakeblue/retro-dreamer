@@ -2,10 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { TrainingStatus } from '../hooks/useTrainingSocket'
+import {
+  TrainingProposalCard,
+  isTrainingStartProposal,
+  type ProposalAction,
+  type TrainingStartProposal,
+} from './TrainingProposalCard'
 
 const API = '/api/copilot'
 
-type Ev = {
+type TextEv = {
   seq: number
   ts: number
   kind: 'user' | 'assistant' | 'tool' | 'meta' | 'raw'
@@ -13,9 +19,35 @@ type Ev = {
   detail?: string // newer backend: full tool input (e.g. complete bash command)
 }
 
+type ProposalEv = {
+  seq: number
+  ts: number
+  kind: 'proposal'
+  proposal: unknown
+}
+
+type Ev = TextEv | ProposalEv
+
 interface CopilotPanelProps {
   selectedGame: string
   status: TrainingStatus | null
+  activeTab: string
+  onTrainingRefresh: () => Promise<void>
+  onOpenMetrics: () => void
+}
+
+type ConfirmResponse = {
+  status: string
+  plan_id: string
+  execution: unknown
+  studio_state?: {
+    revision?: string
+    generated_at?: string
+  }
+  intent?: {
+    type: string
+    tab: string
+  }
 }
 
 const STATE_START = '<STUDIO_STATE>\n'
@@ -31,14 +63,43 @@ export function visibleUserText(text: string): string {
  * (Qwen 3.6 27B on the 2x3090 box) driving the studio's HTTP tools.
  * Reasoning model: minutes-long thinking is normal; the meta events keep
  * the human oriented while it works. */
-export function CopilotPanel({ selectedGame, status }: CopilotPanelProps) {
+export function CopilotPanel({
+  selectedGame,
+  status,
+  activeTab,
+  onTrainingRefresh,
+  onOpenMetrics,
+}: CopilotPanelProps) {
   const [events, setEvents] = useState<Ev[]>([])
   const [running, setRunning] = useState(false)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [contextReceipt, setContextReceipt] = useState<{ revision: string; observedAt: string } | null>(null)
+  const [approvalReady, setApprovalReady] = useState(false)
+  const [approvalError, setApprovalError] = useState<string | null>(null)
+  const [proposalActions, setProposalActions] = useState<Record<string, ProposalAction>>({})
   const lastSeq = useRef(0)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setApprovalError(null)
+    fetch('/api/training/approval-session', {
+      method: 'POST',
+      credentials: 'same-origin',
+      signal: controller.signal,
+    }).then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // The server returns status only. The approval capability remains in an
+      // HttpOnly cookie, outside JavaScript and outside the copilot process.
+      setApprovalReady(true)
+    }).catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      setApprovalReady(false)
+      setApprovalError(error instanceof Error ? error.message : 'session initialization failed')
+    })
+    return () => controller.abort()
+  }, [])
 
   useEffect(() => {
     const t = setInterval(async () => {
@@ -51,6 +112,7 @@ export function CopilotPanel({ selectedGame, status }: CopilotPanelProps) {
           // silently ignores everything until seq outgrows the old session.
           lastSeq.current = 0
           setEvents([])
+          setProposalActions({})
           return
         }
         if (d.events?.length) {
@@ -96,11 +158,57 @@ export function CopilotPanel({ selectedGame, status }: CopilotPanelProps) {
     const res = await fetch(`${API}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, focus_game_id: selectedGame, active_tab: 'copilot' }),
+      body: JSON.stringify({ text, focus_game_id: selectedGame, active_tab: activeTab }),
     })
     if (res.ok) {
       const receipt = await res.json()
       setContextReceipt({ revision: receipt.studio_revision, observedAt: receipt.observed_at })
+    }
+  }
+
+  function proposalAction(id: string): ProposalAction {
+    return proposalActions[id] || { status: 'pending' }
+  }
+
+  function updateProposalAction(id: string, action: ProposalAction) {
+    setProposalActions((current) => ({ ...current, [id]: action }))
+  }
+
+  async function brokerAction(proposal: TrainingStartProposal, action: 'confirm' | 'cancel') {
+    updateProposalAction(proposal.id, { status: action === 'confirm' ? 'confirming' : 'cancelling' })
+    try {
+      const res = await fetch(
+        `/api/training/plans/${encodeURIComponent(proposal.id)}/${action}`,
+        { method: 'POST', credentials: 'same-origin' },
+      )
+      const response = await readJson(res)
+      if (!res.ok) throw new Error(apiError(response, res.status))
+
+      if (action === 'cancel') {
+        updateProposalAction(proposal.id, { status: 'cancelled' })
+        return
+      }
+
+      const confirmed = response as ConfirmResponse
+      if (confirmed.status !== 'confirmed' || confirmed.plan_id !== proposal.id) {
+        throw new Error('Broker returned an invalid confirmation receipt')
+      }
+      updateProposalAction(proposal.id, { status: 'confirmed' })
+      if (confirmed.studio_state?.revision && confirmed.studio_state.generated_at) {
+        setContextReceipt({
+          revision: confirmed.studio_state.revision,
+          observedAt: confirmed.studio_state.generated_at,
+        })
+      }
+      await onTrainingRefresh()
+      if (confirmed.intent?.type === 'open_tab' && confirmed.intent.tab === 'metrics') {
+        onOpenMetrics()
+      }
+    } catch (error) {
+      updateProposalAction(proposal.id, {
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Broker request failed',
+      })
     }
   }
 
@@ -141,7 +249,17 @@ export function CopilotPanel({ selectedGame, status }: CopilotPanelProps) {
             <br />It drives the same studio tools you see in the UI. Thinking can take minutes — it's a reasoning model.
           </p>
         )}
-        {events.map((e) => <EventRow key={e.seq} e={e} />)}
+        {events.map((e) => (
+          <EventRow
+            key={e.seq}
+            e={e}
+            approvalReady={approvalReady}
+            approvalError={approvalError}
+            proposalAction={proposalAction}
+            onConfirm={(proposal) => brokerAction(proposal, 'confirm')}
+            onCancel={(proposal) => brokerAction(proposal, 'cancel')}
+          />
+        ))}
         <div ref={bottomRef} />
       </div>
 
@@ -169,7 +287,43 @@ export function CopilotPanel({ selectedGame, status }: CopilotPanelProps) {
   )
 }
 
-function EventRow({ e }: { e: Ev }) {
+interface EventRowProps {
+  e: Ev
+  approvalReady: boolean
+  approvalError: string | null
+  proposalAction: (id: string) => ProposalAction
+  onConfirm: (proposal: TrainingStartProposal) => void
+  onCancel: (proposal: TrainingStartProposal) => void
+}
+
+function EventRow({
+  e,
+  approvalReady,
+  approvalError,
+  proposalAction,
+  onConfirm,
+  onCancel,
+}: EventRowProps) {
+  if (e.kind === 'proposal') {
+    if (!isTrainingStartProposal(e.proposal)) {
+      return (
+        <div className="px-3 py-2 rounded border border-retro-danger/50 bg-red-950/20 text-[10px] text-retro-danger">
+          Rejected a malformed training proposal event. No action is available.
+        </div>
+      )
+    }
+    const proposal = e.proposal
+    return (
+      <TrainingProposalCard
+        proposal={proposal}
+        action={proposalAction(proposal.id)}
+        approvalReady={approvalReady}
+        approvalError={approvalError}
+        onConfirm={() => onConfirm(proposal)}
+        onCancel={() => onCancel(proposal)}
+      />
+    )
+  }
   if (e.kind === 'assistant') {
     return (
       <div className="px-3 py-2 rounded text-xs bg-retro-surface/60 border border-retro-border/50 copilot-md">
@@ -191,7 +345,7 @@ function EventRow({ e }: { e: Ev }) {
 /** One-line tool call, expandable when we have (or can recover) the full input.
  * Handles both event formats: the newer backend sends {text: "Bash — desc",
  * detail: "<full command>"}; the older one sent "Bash {json truncated @200}". */
-function ToolRow({ e }: { e: Ev }) {
+function ToolRow({ e }: { e: TextEv }) {
   const { summary, detail } = parseToolEvent(e)
   if (!detail) {
     return <div className="px-3 py-1.5 rounded text-[10px] font-mono text-retro-text-dim">⚙ {summary}</div>
@@ -209,7 +363,7 @@ function ToolRow({ e }: { e: Ev }) {
   )
 }
 
-function parseToolEvent(e: Ev): { summary: string; detail?: string } {
+function parseToolEvent(e: TextEv): { summary: string; detail?: string } {
   if (e.detail !== undefined) return { summary: e.text, detail: e.detail || undefined }
 
   // Legacy format: "Name {json possibly cut off at 200 chars}"
@@ -233,4 +387,20 @@ function parseToolEvent(e: Ev): { summary: string; detail?: string } {
     const label = (m ? m[1] : rest).split('\\n')[0].slice(0, 90)
     return { summary: `${name} — ${label}`, detail: rest.length > label.length + 30 ? rest : undefined }
   }
+}
+
+async function readJson(res: Response): Promise<unknown> {
+  try {
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+function apiError(value: unknown, status: number): string {
+  if (typeof value === 'object' && value !== null && 'detail' in value) {
+    const detail = (value as { detail?: unknown }).detail
+    if (typeof detail === 'string') return detail
+  }
+  return `Broker request failed (HTTP ${status})`
 }

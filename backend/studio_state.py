@@ -119,8 +119,10 @@ class StudioStateBuilder:
                 "model_size": config.model_size,
                 "initial_state": config.initial_state,
                 "batch_size": config.batch_size,
+                "batch_length": config.batch_length,
                 "replay_ratio": config.replay_ratio,
                 "num_envs": config.num_envs,
+                "resume_prefill": config.resume_prefill,
             },
         }
 

@@ -14,7 +14,7 @@ type ActiveTab = 'metrics' | 'live' | 'config' | 'copilot'
 export default function App() {
   const [selectedGame, setSelectedGame] = useState('FZero-Snes')
   const [activeTab, setActiveTab] = useState<ActiveTab>('copilot')
-  const { connected, status, videos } = useTrainingPolling()
+  const { connected, status, videos, refresh } = useTrainingPolling()
 
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-retro-bg">
@@ -125,11 +125,19 @@ export default function App() {
               </div>
             )}
 
-            {activeTab === 'copilot' && (
-              <div className="h-full relative">
-                <CopilotPanel selectedGame={selectedGame} status={status} />
-              </div>
-            )}
+            {/* Keep the resident copilot mounted while other tabs are open so
+                event polling and pending approval cards retain their lifecycle. */}
+            <div
+              className={activeTab === 'copilot' ? 'h-full relative' : 'hidden'}
+            >
+              <CopilotPanel
+                selectedGame={selectedGame}
+                status={status}
+                activeTab={activeTab}
+                onTrainingRefresh={refresh}
+                onOpenMetrics={() => setActiveTab('metrics')}
+              />
+            </div>
           </div>
         </div>
       </main>
