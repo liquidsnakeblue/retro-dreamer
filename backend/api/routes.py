@@ -9,6 +9,7 @@ from typing import Optional
 from backend.storage import StorageUsageSampler
 
 router = APIRouter(prefix="/api")
+TRAINING_STATE_DIR = Path(__file__).resolve().parents[2] / "training-state"
 
 
 class TrainingStartRequest(BaseModel):
@@ -155,14 +156,14 @@ async def start_training(req: TrainingStartRequest):
     # Persist the exact start request so the watchdog (or a server restart)
     # can resume WHAT WAS RUNNING instead of hardcoding parameters.
     try:
-        from pathlib import Path
         import json as _json
 
-        state_dir = Path(__file__).resolve().parent.parent.parent / "training-state"
-        state_dir.mkdir(parents=True, exist_ok=True)
+        TRAINING_STATE_DIR.mkdir(parents=True, exist_ok=True)
         body = req.model_dump()
         body["fresh_start"] = False  # a watchdog resume must never fresh-start
-        (state_dir / "last_start_request.json").write_text(_json.dumps(body, indent=2))
+        (TRAINING_STATE_DIR / "last_start_request.json").write_text(
+            _json.dumps(body, indent=2)
+        )
     except Exception as exc:
         print(f"[API] failed to persist last_start_request: {exc}")
 

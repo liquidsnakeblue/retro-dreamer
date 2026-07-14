@@ -208,6 +208,8 @@ class CheckpointPolicyApiTest(unittest.TestCase):
     def setUp(self):
         self.old_trainer = routes._trainer
         self.old_game_manager = routes._game_manager
+        self.old_training_state_dir = routes.TRAINING_STATE_DIR
+        self.state_temp = tempfile.TemporaryDirectory()
         self.trainer = SimpleNamespace(config=None)
 
         def start(config, fresh_start=False):
@@ -217,10 +219,13 @@ class CheckpointPolicyApiTest(unittest.TestCase):
         self.trainer.start = start
         routes._trainer = self.trainer
         routes._game_manager = None
+        routes.TRAINING_STATE_DIR = Path(self.state_temp.name)
 
     def tearDown(self):
         routes._trainer = self.old_trainer
         routes._game_manager = self.old_game_manager
+        routes.TRAINING_STATE_DIR = self.old_training_state_dir
+        self.state_temp.cleanup()
 
     def test_start_request_applies_checkpoint_overrides(self):
         request = TrainingStartRequest(
@@ -235,6 +240,10 @@ class CheckpointPolicyApiTest(unittest.TestCase):
         self.assertEqual(self.trainer.config.checkpoint_keep_last, 4)
         self.assertEqual(self.trainer.config.checkpoint_milestone_every, 100_000)
         self.assertEqual(self.trainer.config.checkpoint_keep_milestones, 2)
+        persisted = json.loads(
+            (routes.TRAINING_STATE_DIR / "last_start_request.json").read_text()
+        )
+        self.assertEqual(persisted["checkpoint_every"], 20_000)
 
     def test_start_request_rejects_bool_and_invalid_cross_field_policy(self):
         with self.assertRaises(ValidationError):
