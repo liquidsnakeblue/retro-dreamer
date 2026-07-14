@@ -21,6 +21,7 @@ class TrainingStartRequest(BaseModel):
     fresh_start: bool = False
     game_id: Optional[str] = None
     initial_state: Optional[str] = None
+    action_manifest_hash: Optional[str] = None
     resume_prefill: Optional[int] = None
     checkpoint_every: Optional[StrictInt] = None
     checkpoint_keep_last: Optional[StrictInt] = None
@@ -124,6 +125,8 @@ async def start_training(req: TrainingStartRequest):
         except Exception as exc:
             print(f"[API] default_state lookup failed: {exc}")
 
+    config.action_manifest_hash = req.action_manifest_hash
+
     # Override numeric hyperparams if provided
     if req.batch_size is not None:
         config.batch_size = req.batch_size
@@ -151,7 +154,13 @@ async def start_training(req: TrainingStartRequest):
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
-    _trainer.start(config, fresh_start=req.fresh_start)
+    try:
+        _trainer.start(config, fresh_start=req.fresh_start)
+    except ValueError as exc:
+        # Launch-time compatibility failures (legacy/missing manifest, stale
+        # plan, reordered actions, replay metadata mismatch) are conflicts,
+        # not opaque server errors. Preserve the actionable trainer message.
+        raise HTTPException(409, str(exc)) from exc
 
     # Persist the exact start request so the watchdog (or a server restart)
     # can resume WHAT WAS RUNNING instead of hardcoding parameters.
@@ -161,6 +170,10 @@ async def start_training(req: TrainingStartRequest):
         TRAINING_STATE_DIR.mkdir(parents=True, exist_ok=True)
         body = req.model_dump()
         body["fresh_start"] = False  # a watchdog resume must never fresh-start
+        # Direct API callers may omit the optimistic hash. The synchronous
+        # trainer fills the actual sealed digest before returning, so watchdog
+        # restarts still carry an exact launch binding.
+        body["action_manifest_hash"] = config.action_manifest_hash
         (TRAINING_STATE_DIR / "last_start_request.json").write_text(
             _json.dumps(body, indent=2)
         )
@@ -173,6 +186,7 @@ async def start_training(req: TrainingStartRequest):
         "game_id": config.game_id,
         "initial_state": config.initial_state,
         "fresh_start": req.fresh_start,
+        "action_manifest_hash": config.action_manifest_hash,
     }
 
 

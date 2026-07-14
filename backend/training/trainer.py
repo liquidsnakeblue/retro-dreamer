@@ -14,6 +14,7 @@ import shutil
 import sys
 import time
 import subprocess
+import tempfile
 import threading
 from collections import deque
 from enum import Enum
@@ -21,9 +22,15 @@ from pathlib import Path
 from typing import Optional
 
 import torch
+import yaml
 
 from .config import TrainingConfig
 from .callbacks import TensorBoardCallback, WebSocketBroadcaster, EpisodeRenderer
+from backend.action_manifest import (
+    build_action_manifest,
+    load_action_manifest,
+    write_action_manifest,
+)
 from backend import catalog as _catalog
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -42,6 +49,26 @@ SHEEPRL_PYTHON = sys.executable
 def _sheeprl_logs(game_id: str) -> Path:
     """Return the SheepRL log directory for a given game."""
     return SHEEPRL_DIR / "logs" / "runs" / "dreamer_v3" / game_id
+
+
+def _atomic_write_json(path: Path, value: dict):
+    """Durably replace a small JSON reference file in its own directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(value, fh, sort_keys=True, separators=(",", ":"))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 # ffprobe is ~100ms per file; without a cache the dashboard's 5s poll runs it
@@ -134,6 +161,8 @@ class DreamerV3Trainer:
         self._start_time = 0.0
         self._error_message = ""
         self._fresh_start = False
+        self._action_manifest_hash: Optional[str] = None
+        self._action_manifest_path: Optional[Path] = None
 
         # Active run directory (set when training starts)
         self._run_dir: Optional[Path] = None
@@ -181,13 +210,86 @@ class DreamerV3Trainer:
         )
 
     @staticmethod
-    def _action_count(game_dir: str) -> Optional[int]:
-        """Discrete action count from the workspace actions.json (None if absent)."""
-        path = Path(game_dir) / "actions.json"
+    def _workspace_action_manifest(game_id: str, game_dir: Path) -> dict:
+        path = game_dir / "actions.json"
         try:
-            return len(json.loads(path.read_text())["actions"])
-        except Exception:
-            return None
+            actions_data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot build action manifest from {path}: {exc}") from exc
+        return build_action_manifest(game_id, actions_data)
+
+    @staticmethod
+    def _checkpoint_action_manifest(checkpoint: Path, game_id: str) -> tuple[Path, dict]:
+        config_path = checkpoint.parent.parent / "config.yaml"
+        try:
+            resolved = yaml.safe_load(config_path.read_text()) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise ValueError(f"resumed checkpoint config is unreadable: {exc}") from exc
+        wrapper = ((resolved.get("env") or {}).get("wrapper") or {})
+        manifest_text = wrapper.get("action_manifest")
+        expected_hash = wrapper.get("action_manifest_hash")
+        if not manifest_text or not expected_hash:
+            raise ValueError(
+                "legacy checkpoint has no immutable action manifest; action ordering "
+                "is unprovable, so start fresh or perform an explicit audited legacy seal"
+            )
+        manifest_path = Path(manifest_text)
+        if not manifest_path.is_absolute():
+            manifest_path = (config_path.parent / manifest_path).resolve()
+        try:
+            manifest = load_action_manifest(
+                manifest_path,
+                expected_game_id=game_id,
+                expected_hash=expected_hash,
+            )
+        except (OSError, TypeError, ValueError, KeyError) as exc:
+            raise ValueError(f"resumed checkpoint action manifest is invalid: {exc}") from exc
+        return manifest_path, manifest
+
+    def _prepare_action_manifest(
+        self,
+        game_dir: Path,
+        lineage_dir: Path,
+        resume_ckpt: Optional[str],
+        *,
+        expected_catalog_hash: Optional[str] = None,
+        require_catalog_hash: bool = False,
+    ) -> tuple[Path, dict]:
+        """Bind this launch to immutable ordered actions before any replay mutation."""
+        current = self._workspace_action_manifest(self.config.game_id, game_dir)
+        requested_hash = self.config.action_manifest_hash
+        if requested_hash is not None and requested_hash != current["sha256"]:
+            raise ValueError(
+                "training plan is stale: ordered actions changed before launch "
+                f"(planned {requested_hash}, current {current['sha256']})"
+            )
+        if resume_ckpt:
+            saved_path, saved = self._checkpoint_action_manifest(
+                Path(resume_ckpt), self.config.game_id
+            )
+            if require_catalog_hash and not expected_catalog_hash:
+                raise ValueError(
+                    "resumable catalog snapshot has no immutable action-manifest "
+                    "binding; start fresh or perform an explicit audited legacy seal"
+                )
+            if (
+                expected_catalog_hash is not None
+                and saved["sha256"] != expected_catalog_hash
+            ):
+                raise ValueError(
+                    "resumed config action manifest conflicts with the catalog's "
+                    f"write-once binding: catalog {expected_catalog_hash}, "
+                    f"config {saved['sha256']}"
+                )
+            if saved["sha256"] != current["sha256"]:
+                raise ValueError(
+                    "ordered actions changed since the resumed checkpoint: "
+                    f"saved {saved['sha256']}, current {current['sha256']}; "
+                    "same-count reorders and remaps cannot resume"
+                )
+            return saved_path, saved
+        path = write_action_manifest(current, lineage_dir)
+        return Path(path), current
 
     def start(self, config: Optional[TrainingConfig] = None, fresh_start: bool = False):
         """Launch SheepRL training as a subprocess."""
@@ -197,6 +299,9 @@ class DreamerV3Trainer:
             self.config = config
         self.config.validate()
         self._active_run = None
+        self._action_manifest_hash = None
+        self._action_manifest_path = None
+        self._resume_catalog_action_hash: Optional[str] = None
 
         self.state = TrainingState.TRAINING
         self._error_message = ""
@@ -298,14 +403,10 @@ class DreamerV3Trainer:
         }
         algo = model_map.get(cfg.model_size, "dreamer_v3_S")
 
-        # Write the torch.load patch wrapper script into SHEEPRL_DIR
-        wrapper_path = SHEEPRL_DIR / "_retro_run.py"
-        SHEEPRL_DIR.mkdir(parents=True, exist_ok=True)
-        wrapper_path.write_text(_WRAPPER_SCRIPT)
-
         lineage_dir = STATE_DIR / "games" / game_id / "lineages" / "main"
         retention_manifest = lineage_dir / "checkpoint-retention.json"
         retention_root = _sheeprl_logs(game_id)
+        wrapper_path = SHEEPRL_DIR / "_retro_run.py"
 
         # Build command
         cmd = [
@@ -364,6 +465,26 @@ class DreamerV3Trainer:
                     cmd.append("algo.learning_starts=0")
                     print(f"[Trainer] Resuming from: {resume_ckpt}")
 
+        # Seal and validate the exact ordered actions before touching replay
+        # state or spawning the child. A resumed run uses its checkpoint's
+        # immutable object and additionally requires the current workspace to
+        # match, so equal-count reorders cannot silently reinterpret policy
+        # logits or replay actions.
+        manifest_path, manifest = self._prepare_action_manifest(
+            game_dir,
+            lineage_dir,
+            resume_ckpt,
+            expected_catalog_hash=self._resume_catalog_action_hash,
+            require_catalog_hash=resume_ckpt is not None,
+        )
+        self._action_manifest_path = manifest_path
+        self._action_manifest_hash = manifest["sha256"]
+        cfg.action_manifest_hash = manifest["sha256"]
+        cmd.extend((
+            f'env.wrapper.action_manifest="{manifest_path}"',
+            f"env.wrapper.action_manifest_hash={manifest['sha256']}",
+        ))
+
         # Replay-buffer hygiene. SheepRL memmaps raw .memmap files with
         # whatever shapes THIS run assumes — no metadata on disk. A fresh
         # buffer created over a stale dir whose arrays were written with a
@@ -373,8 +494,12 @@ class DreamerV3Trainer:
         # buffer restored → verify shapes via our meta file.
         buffer_restored = resume_ckpt is not None and cfg.resume_prefill == 0
         buffer_meta_path = replay_dir.parent / "buffer-meta.json"
-        current_meta = {"num_envs": cfg.num_envs,
-                        "action_count": self._action_count(abs_game_dir)}
+        current_meta = {
+            "format": "retro-dreamer-buffer-meta-v2",
+            "num_envs": cfg.num_envs,
+            "action_count": len(manifest["actions"]),
+            "action_manifest_hash": manifest["sha256"],
+        }
         if not buffer_restored:
             if replay_dir.exists():
                 print(f"[Trainer] Wiping stale replay buffer: {replay_dir}")
@@ -385,11 +510,17 @@ class DreamerV3Trainer:
                 raise ValueError(
                     f"Replay buffer at {replay_dir} was written with "
                     f"{saved_meta}, but this run is {current_meta} — resuming "
-                    f"would corrupt the buffer (actions.json or num_envs "
+                    f"would corrupt the buffer (ordered actions or num_envs "
                     f"changed since). Start fresh, or restore the old config."
                 )
+        else:
+            raise ValueError(
+                f"Legacy replay buffer at {replay_dir} has no immutable v2 "
+                "buffer-meta.json; action ordering is unprovable. Start fresh "
+                "or perform an explicit audited legacy seal."
+            )
         replay_dir.mkdir(parents=True, exist_ok=True)
-        buffer_meta_path.write_text(json.dumps(current_meta))
+        _atomic_write_json(buffer_meta_path, current_meta)
         cmd.append(f"buffer.memmap_dir={replay_dir}")
 
         env = os.environ.copy()
@@ -434,6 +565,11 @@ class DreamerV3Trainer:
         self._control_dir.mkdir(parents=True, exist_ok=True)
         env["RETRO_CONTROL_DIR"] = str(self._control_dir)
 
+        # Write the small static launcher only after every compatibility check
+        # has succeeded. It is repository scaffolding, not launch identity.
+        SHEEPRL_DIR.mkdir(parents=True, exist_ok=True)
+        wrapper_path.write_text(_WRAPPER_SCRIPT)
+
         print(
             f"[Trainer] Launching SheepRL "
             f"({algo}, game={game_id}, state={initial_state}, batch={cfg.batch_size})..."
@@ -477,6 +613,7 @@ class DreamerV3Trainer:
     # ------------------------------------------------------------------
 
     def _catalog_resumable_head(self, game_id: str) -> Optional[str]:
+        con = None
         try:
             con = _catalog.connect()
             # Re-crawl before resolving: checkpoints written while no live
@@ -485,11 +622,14 @@ class DreamerV3Trainer:
             # near-missed a 545k-step rewind on 2026-07-10. Idempotent+fast.
             _catalog.register_existing_runs(con, game_filter=game_id)
             head = _catalog.get_resumable_head(con, game_id)
-            con.close()
+            self._resume_catalog_action_hash = head["config_hash"] if head else None
             return head["checkpoint_path"] if head else None
         except Exception as exc:
             print(f"[Trainer] catalog head lookup failed: {exc}")
             return None
+        finally:
+            if con is not None:
+                con.close()
 
     def _catalog_register_session(
         self,
@@ -604,6 +744,7 @@ class DreamerV3Trainer:
             _catalog.register_snapshot(
                 con, self._catalog_session_id, int(step or 0), str(path),
                 replay_path=str(replay) if replay.exists() else None,
+                config_hash=self._action_manifest_hash,
             )
             con.execute(
                 "UPDATE sessions SET end_step=? WHERE id=?",

@@ -10,6 +10,7 @@ from fastapi import Response
 from pydantic import ValidationError
 
 from backend import copilot
+from backend.action_manifest import build_action_manifest, write_action_manifest
 from backend.api import routes
 from backend.training.planner import PlannerError, TrainingPlanner
 
@@ -74,6 +75,10 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.clock = FakeClock()
         self.builder = FakeStateBuilder()
+        self.current_manifest = build_action_manifest(
+            "Focus-Game",
+            self.builder.state["focused_game"]["configs"]["actions.json"],
+        )
         self.plan_number = 0
 
         def next_plan_id():
@@ -91,6 +96,12 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     def add_head(self, recurrent_size=2048):
+        replay_path = Path(self.temp.name) / "lineage" / "replay"
+        replay_path.mkdir(parents=True)
+        manifest_path = write_action_manifest(
+            self.current_manifest, replay_path.parent
+        )
+        self.head_manifest_path = manifest_path
         config_path = Path(self.temp.name) / "config.yaml"
         config_path.write_text(
             "algo:\n"
@@ -104,11 +115,16 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             "  num_envs: 6\n"
             "  wrapper:\n"
             "    initial_state: start+hard\n"
+            f"    action_manifest: {manifest_path}\n"
+            f"    action_manifest_hash: {self.current_manifest['sha256']}\n"
         )
-        replay_path = Path(self.temp.name) / "lineage" / "replay"
-        replay_path.mkdir(parents=True)
         (replay_path.parent / "buffer-meta.json").write_text(
-            json.dumps({"num_envs": 6, "action_count": 1})
+            json.dumps({
+                "format": "retro-dreamer-buffer-meta-v2",
+                "num_envs": 6,
+                "action_count": 1,
+                "action_manifest_hash": self.current_manifest["sha256"],
+            })
         )
         self.builder.state["focused_game"]["brain"] = {
             "has_brain": True,
@@ -116,6 +132,7 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             "head": {
                 "snapshot_id": 7,
                 "step": 12345,
+                "action_manifest_hash": self.current_manifest["sha256"],
                 "replay_available": True,
                 "replay_path": str(replay_path),
                 "resolved_config": str(config_path),
@@ -133,6 +150,7 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             "strategy": "new",
             "initial_state": "start",
             "fresh_start": False,
+            "action_manifest_hash": self.current_manifest["sha256"],
         })
         self.assertEqual(proposal["model"], {"size": "medium"})
         self.assertEqual(proposal["num_envs"], 8)
@@ -146,6 +164,10 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exact["route"], "/api/training/start")
         self.assertFalse(exact["body"]["fresh_start"])
         self.assertEqual(exact["body"]["batch_length"], 64)
+        self.assertEqual(
+            exact["body"]["action_manifest_hash"],
+            self.current_manifest["sha256"],
+        )
 
         # Mutating the caller's returned object cannot alter the stored body.
         proposal["exact_request"]["body"]["model_size"] = "xl"
@@ -193,6 +215,7 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             "strategy": "resume",
             "initial_state": "start+hard",
             "fresh_start": False,
+            "action_manifest_hash": self.current_manifest["sha256"],
         })
         self.assertEqual(proposal["head"], {
             "snapshot_id": 7, "step": 12345, "lineage": "main"
@@ -222,6 +245,7 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             "strategy": "fresh",
             "initial_state": "hard",
             "fresh_start": True,
+            "action_manifest_hash": self.current_manifest["sha256"],
         })
 
     def test_resume_rejects_incompatible_buffer_metadata_before_proposal(self):
@@ -230,15 +254,85 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             self.builder.state["focused_game"]["brain"]["head"]["replay_path"]
         )
         (replay_path.parent / "buffer-meta.json").write_text(
-            json.dumps({"num_envs": 6, "action_count": 99})
+            json.dumps({
+                "format": "retro-dreamer-buffer-meta-v2",
+                "num_envs": 6,
+                "action_count": 99,
+                "action_manifest_hash": self.current_manifest["sha256"],
+            })
         )
         with self.assertRaisesRegex(PlannerError, "replay buffer is incompatible") as caught:
+            self.planner.create_plan({"game_id": "Focus-Game"})
+        self.assertEqual(caught.exception.status_code, 409)
+
+    def test_resume_rejects_same_count_action_reorder(self):
+        self.add_head()
+        rows = self.builder.state["focused_game"]["configs"]["actions.json"]["actions"]
+        rows.append({"name": "Forward", "buttons": ["B"]})
+        # Reseal the saved two-action order, then reverse only the workspace.
+        saved = build_action_manifest("Focus-Game", {"actions": list(rows)})
+        manifest_path = write_action_manifest(saved, Path(self.temp.name) / "saved")
+        config_path = Path(
+            self.builder.state["focused_game"]["brain"]["head"]["resolved_config"]
+        )
+        text = config_path.read_text()
+        text = text.replace(
+            f"action_manifest: {self.head_manifest_path}",
+            f"action_manifest: {manifest_path}",
+        ).replace(
+            f"action_manifest_hash: {self.current_manifest['sha256']}",
+            f"action_manifest_hash: {saved['sha256']}",
+        )
+        config_path.write_text(text)
+        replay_path = Path(
+            self.builder.state["focused_game"]["brain"]["head"]["replay_path"]
+        )
+        (replay_path.parent / "buffer-meta.json").write_text(json.dumps({
+            "format": "retro-dreamer-buffer-meta-v2",
+            "num_envs": 6,
+            "action_count": 2,
+            "action_manifest_hash": saved["sha256"],
+        }))
+        self.builder.state["focused_game"]["brain"]["head"][
+            "action_manifest_hash"
+        ] = saved["sha256"]
+        rows.reverse()
+
+        with self.assertRaisesRegex(PlannerError, "same-count reorders") as caught:
             self.planner.create_plan({"game_id": "Focus-Game"})
         self.assertEqual(caught.exception.status_code, 409)
 
     def test_unknown_resumed_architecture_is_rejected(self):
         self.add_head(recurrent_size=777)
         with self.assertRaisesRegex(PlannerError, "unknown resumed architecture") as caught:
+            self.planner.create_plan({"game_id": "Focus-Game"})
+        self.assertEqual(caught.exception.status_code, 409)
+
+    def test_legacy_resume_without_manifest_fails_closed(self):
+        config_path = self.add_head()
+        config_path.write_text("\n".join(
+            line for line in config_path.read_text().splitlines()
+            if "action_manifest" not in line
+        ) + "\n")
+
+        with self.assertRaisesRegex(PlannerError, "legacy checkpoint") as caught:
+            self.planner.create_plan({"game_id": "Focus-Game"})
+        self.assertEqual(caught.exception.status_code, 409)
+
+        fresh = self.planner.create_plan({
+            "game_id": "Focus-Game",
+            "fresh_start": True,
+        })
+        self.assertEqual("new", fresh["mode"])
+        self.assertEqual("fresh", fresh["launch"]["strategy"])
+
+    def test_resume_rejects_config_that_conflicts_with_catalog_binding(self):
+        self.add_head()
+        self.builder.state["focused_game"]["brain"]["head"][
+            "action_manifest_hash"
+        ] = "b" * 64
+
+        with self.assertRaisesRegex(PlannerError, "write-once binding") as caught:
             self.planner.create_plan({"game_id": "Focus-Game"})
         self.assertEqual(caught.exception.status_code, 409)
 

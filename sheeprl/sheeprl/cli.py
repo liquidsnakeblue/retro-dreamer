@@ -13,6 +13,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.distributions import Distribution
 
 from sheeprl.utils.imports import _IS_MLFLOW_AVAILABLE
+from sheeprl.action_manifest import validate_resume_action_binding
 from sheeprl.utils.logger import get_logger
 from sheeprl.utils.metric import MetricAggregator
 from sheeprl.utils.registry import algorithm_registry, evaluation_registry
@@ -66,6 +67,14 @@ def resume_from_checkpoint(cfg: DictConfig) -> DictConfig:
     # a practice-mode brain on a Grand Prix state, save-state curricula).
     if "wrapper" in old_cfg.get("env", {}):
         old_cfg.env.wrapper.pop("initial_state", None)
+    # Action identity is a hard Retro Dreamer invariant. Other SheepRL envs
+    # also have wrapper blocks, so the shared validator deliberately no-ops
+    # for them.
+    validate_resume_action_binding(
+        old_cfg.env.id,
+        old_cfg.env.get("wrapper") or {},
+        cfg.env.get("wrapper") or {},
+    )
     # Operational knobs the launcher stamps on EVERY start — honor the new
     # composition instead of silently reverting to the old run's values
     # (audit 2026-07-09: replay_ratio/batch/entropy/cadence changes at resume

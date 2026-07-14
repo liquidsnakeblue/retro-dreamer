@@ -202,6 +202,7 @@ class StudioStateBuilder:
                         "created_at": head["created_at"],
                         "replay_available": replay_available,
                         "validation_status": head["validation_status"],
+                        "action_manifest_hash": head["config_hash"],
                         "compatibility_revision": compatibility_revision,
                     }
                     if full:

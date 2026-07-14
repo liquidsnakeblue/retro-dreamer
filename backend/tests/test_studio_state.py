@@ -88,9 +88,10 @@ class StudioStateBuilderTest(unittest.TestCase):
             (lineage_id, str(root / "run"), "ended", str(resolved)),
         ).lastrowid
         con.execute(
-            "INSERT INTO snapshots (session_id,step,checkpoint_path,replay_path,created_at) "
-            "VALUES (?,?,?,?,?)",
-            (session_id, 123, str(checkpoint), str(replay), 2.0),
+            "INSERT INTO snapshots "
+            "(session_id,step,checkpoint_path,replay_path,config_hash,created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (session_id, 123, str(checkpoint), str(replay), "a" * 64, 2.0),
         )
         con.commit()
         con.close()
@@ -125,6 +126,10 @@ class StudioStateBuilderTest(unittest.TestCase):
         self.assertEqual(compact["revision"], full["revision"])
         self.assertNotIn("builtins", compact["inventory"])
         self.assertIn("builtins", full["inventory"])
+        self.assertEqual(
+            "a" * 64,
+            full["focused_game"]["brain"]["head"]["action_manifest_hash"],
+        )
         self.assertLessEqual(len(json.dumps(compact, separators=(",", ":"))), 4096)
         for section in ("focus", "training", "inventory", "focused_game",
                         "advisor", "tools", "capabilities"):

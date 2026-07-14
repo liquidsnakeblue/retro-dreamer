@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend import catalog
 
@@ -74,6 +75,75 @@ class ResumableHeadTest(unittest.TestCase):
         fresh_checkpoint.unlink()
         head = catalog.get_resumable_head(self.con, "game", "main")
         self.assertEqual(Path(head["checkpoint_path"]), old_checkpoint)
+
+    def test_snapshot_action_manifest_hash_is_write_once(self):
+        session = self._session("run", 100.0)
+        checkpoint = self.root / "bound.ckpt"
+        checkpoint.write_bytes(b"checkpoint")
+        digest = "a" * 64
+
+        snapshot_id = catalog.register_snapshot(
+            self.con,
+            session,
+            10,
+            str(checkpoint),
+            config_hash=digest,
+        )
+        row = self.con.execute(
+            "SELECT config_hash FROM snapshots WHERE id=?", (snapshot_id,)
+        ).fetchone()
+        self.assertEqual(digest, row["config_hash"])
+
+        with self.assertRaisesRegex(ValueError, "already bound"):
+            catalog.register_snapshot(
+                self.con,
+                session,
+                10,
+                str(checkpoint),
+                config_hash="b" * 64,
+            )
+        row = self.con.execute(
+            "SELECT config_hash FROM snapshots WHERE id=?", (snapshot_id,)
+        ).fetchone()
+        self.assertEqual(digest, row["config_hash"])
+
+    def test_catalog_recrawl_backfills_null_action_manifest_hash(self):
+        run_dir = (
+            self.root
+            / "sheeprl/logs/runs/dreamer_v3/game"
+            / "2026-07-14_01-02-03_dreamer_v3_retro-dreamer_42"
+            / "version_0"
+        )
+        checkpoint = run_dir / "checkpoint" / "ckpt_10_0.ckpt"
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.write_bytes(b"checkpoint")
+        config = run_dir / "config.yaml"
+        config.write_text("env:\n  id: retro-dreamer\n")
+
+        with patch.object(catalog, "PROJECT_ROOT", self.root):
+            catalog.register_existing_runs(
+                self.con, game_filter="game", active_run_dir=str(run_dir)
+            )
+            row = self.con.execute(
+                "SELECT config_hash FROM snapshots WHERE checkpoint_path=?",
+                (str(checkpoint),),
+            ).fetchone()
+            self.assertIsNone(row["config_hash"])
+
+            digest = "c" * 64
+            config.write_text(
+                "env:\n  id: retro-dreamer\n  wrapper:\n"
+                f"    action_manifest_hash: {digest}\n"
+            )
+            catalog.register_existing_runs(
+                self.con, game_filter="game", active_run_dir=str(run_dir)
+            )
+
+        row = self.con.execute(
+            "SELECT config_hash FROM snapshots WHERE checkpoint_path=?",
+            (str(checkpoint),),
+        ).fetchone()
+        self.assertEqual(digest, row["config_hash"])
 
 
 if __name__ == "__main__":

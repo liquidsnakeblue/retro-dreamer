@@ -93,6 +93,11 @@ else:
     cfg.setdefault("seed", 42)
     cfg.env.wrapper.game_id = _game_id
     cfg.env.wrapper.game_dir = str(_game_dir)
+    # Random capture is an authoring workflow for the current workspace, not
+    # checkpoint evaluation. Never inherit an unrelated template manifest.
+    cfg.env.wrapper.action_manifest = ""
+    cfg.env.wrapper.action_manifest_hash = ""
+    cfg.env.wrapper.allow_mutable_actions = True
 
 cfg.env.num_envs = 1
 cfg.env.capture_video = False

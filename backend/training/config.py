@@ -12,7 +12,8 @@ removed 2026-07-09 after an audit found it accepted values that silently
 never reached training.
 """
 
-from dataclasses import dataclass, asdict
+import re
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import yaml
@@ -26,6 +27,10 @@ class TrainingConfig:
     game_id: str = "FZero-Snes"
     initial_state: str = "go"
     env_state: str = "go"  # legacy fallback still read by the trainer
+    # Optional optimistic-concurrency guard supplied by the planner. The
+    # trainer always recomputes the workspace manifest immediately before
+    # launch and rejects a stale planned hash.
+    action_manifest_hash: str | None = None
 
     # Model size preset -> SheepRL algo config (dreamer_v3_XS/S/M/L/XL)
     model_size: str = "small"  # debug/small/medium/large/xl
@@ -63,6 +68,11 @@ class TrainingConfig:
 
     def validate(self) -> "TrainingConfig":
         """Reject unsafe checkpoint policies before a training child starts."""
+        if (
+            self.action_manifest_hash is not None
+            and not re.fullmatch(r"[0-9a-f]{64}", self.action_manifest_hash)
+        ):
+            raise ValueError("action_manifest_hash must be a lowercase SHA-256 hex digest")
         integer_fields = (
             "checkpoint_every",
             "checkpoint_keep_last",

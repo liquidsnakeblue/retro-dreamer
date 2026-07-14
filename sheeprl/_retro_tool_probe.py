@@ -78,7 +78,13 @@ results = []
 printed_actions = False
 for state in states_csv.split(","):
     env = RetroDreamerWrapper(
-        game_id=game_id, game_dir=game_dir, initial_state=state, frame_skip=4
+        game_id=game_id,
+        game_dir=game_dir,
+        initial_state=state,
+        frame_skip=4,
+        # This is an authoring pre-flight: it intentionally probes the current
+        # workspace draft rather than a training/checkpoint manifest.
+        allow_mutable_actions=True,
     )
     if not printed_actions:
         # What each action REALLY presses (resolved against the live core) —

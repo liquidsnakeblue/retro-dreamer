@@ -157,16 +157,39 @@ def get_watch_head(con) -> Optional[sqlite3.Row]:
 
 def register_snapshot(con, session_id: int, step: int, checkpoint_path: str,
                       replay_path: str = None, kind: str = "resume",
-                      metrics: dict = None) -> int:
+                      metrics: dict = None, config_hash: str = None) -> int:
     cur = con.execute(
         """INSERT OR IGNORE INTO snapshots
-           (session_id, step, checkpoint_path, replay_path, kind, metrics_json, created_at)
-           VALUES (?,?,?,?,?,?,?)""",
+           (session_id, step, checkpoint_path, replay_path, kind, config_hash,
+            metrics_json, created_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
         (session_id, step, checkpoint_path, replay_path, kind,
-         json.dumps(metrics) if metrics else None, time.time()),
+         config_hash, json.dumps(metrics) if metrics else None, time.time()),
     )
+    if config_hash:
+        # A filesystem crawl can win the race and insert this checkpoint
+        # before the live registrar. Fill its immutable action identity rather
+        # than leaving the earlier count-only row authoritative forever.
+        existing = con.execute(
+            "SELECT config_hash FROM snapshots WHERE checkpoint_path=?",
+            (checkpoint_path,),
+        ).fetchone()
+        if existing and existing["config_hash"] not in (None, config_hash):
+            con.rollback()
+            raise ValueError(
+                f"checkpoint {checkpoint_path} is already bound to action manifest "
+                f"{existing['config_hash']}, not {config_hash}"
+            )
+        con.execute(
+            "UPDATE snapshots SET config_hash=? WHERE checkpoint_path=? "
+            "AND config_hash IS NULL",
+            (config_hash, checkpoint_path),
+        )
     con.commit()
-    return cur.lastrowid
+    row = con.execute(
+        "SELECT id FROM snapshots WHERE checkpoint_path=?", (checkpoint_path,)
+    ).fetchone()
+    return row["id"] if row else cur.lastrowid
 
 
 # ------------------------------------------------------------------
@@ -207,6 +230,18 @@ def _resume_from(run_dir: Path) -> Optional[str]:
     return None
 
 
+def _action_manifest_hash(run_dir: Path) -> Optional[str]:
+    """Read the launch-bound action digest from a saved resolved config."""
+    cfg = run_dir / "config.yaml"
+    if not cfg.exists():
+        return None
+    for line in cfg.read_text().splitlines():
+        match = re.match(r"\s+action_manifest_hash:\s*['\"]?([0-9a-f]{64})['\"]?\s*$", line)
+        if match:
+            return match.group(1)
+    return None
+
+
 def register_existing_runs(con, game_filter: str = None, active_run_dir: str = None):
     """Idempotently register historical run dirs as lineages/sessions/snapshots.
 
@@ -234,6 +269,7 @@ def register_existing_runs(con, game_filter: str = None, active_run_dir: str = N
             "run_dir": str(vdir),
             "started_at": _run_started_at(vdir),
             "resume_from": _resume_from(vdir),
+            "action_manifest_hash": _action_manifest_hash(vdir),
             "ckpts": {int(_CKPT_STEP.search(p.name).group(1)): str(p)
                       for p in ckpts if _CKPT_STEP.search(p.name)},
             "steps": steps,
@@ -316,12 +352,32 @@ def register_existing_runs(con, game_filter: str = None, active_run_dir: str = N
             for step, path in sorted(r["ckpts"].items()):
                 con.execute(
                     """INSERT OR IGNORE INTO snapshots
-                       (session_id, step, checkpoint_path, replay_path, kind, created_at)
-                       VALUES (?,?,?,?,'resume',?)""",
+                       (session_id, step, checkpoint_path, replay_path, kind,
+                        config_hash, created_at)
+                       VALUES (?,?,?,?,'resume',?,?)""",
                     (session_id, step, path,
                      str(memmap) if memmap.exists() else None,
+                     r["action_manifest_hash"],
                      Path(path).stat().st_mtime),
                 )
+                if r["action_manifest_hash"]:
+                    existing = con.execute(
+                        "SELECT config_hash FROM snapshots WHERE checkpoint_path=?",
+                        (path,),
+                    ).fetchone()
+                    if existing and existing["config_hash"] not in (
+                        None,
+                        r["action_manifest_hash"],
+                    ):
+                        raise ValueError(
+                            f"checkpoint {path} catalog hash conflicts with its "
+                            "resolved config action manifest"
+                        )
+                    con.execute(
+                        "UPDATE snapshots SET config_hash=? WHERE checkpoint_path=? "
+                        "AND config_hash IS NULL",
+                        (r["action_manifest_hash"], path),
+                    )
     con.commit()
 
 

@@ -230,20 +230,24 @@ class CheckpointPolicyApiTest(unittest.TestCase):
     def test_start_request_applies_checkpoint_overrides(self):
         request = TrainingStartRequest(
             model_size="small",
+            action_manifest_hash="a" * 64,
             checkpoint_every=20_000,
             checkpoint_keep_last=4,
             checkpoint_milestone_every=100_000,
             checkpoint_keep_milestones=2,
         )
-        asyncio.run(routes.start_training(request))
+        result = asyncio.run(routes.start_training(request))
         self.assertEqual(self.trainer.config.checkpoint_every, 20_000)
         self.assertEqual(self.trainer.config.checkpoint_keep_last, 4)
         self.assertEqual(self.trainer.config.checkpoint_milestone_every, 100_000)
         self.assertEqual(self.trainer.config.checkpoint_keep_milestones, 2)
+        self.assertEqual(self.trainer.config.action_manifest_hash, "a" * 64)
         persisted = json.loads(
             (routes.TRAINING_STATE_DIR / "last_start_request.json").read_text()
         )
         self.assertEqual(persisted["checkpoint_every"], 20_000)
+        self.assertEqual(persisted["action_manifest_hash"], "a" * 64)
+        self.assertEqual(result["action_manifest_hash"], "a" * 64)
 
     def test_start_request_rejects_bool_and_invalid_cross_field_policy(self):
         with self.assertRaises(ValidationError):
@@ -254,6 +258,40 @@ class CheckpointPolicyApiTest(unittest.TestCase):
                 checkpoint_milestone_every=50_000,
             )))
         self.assertEqual(caught.exception.status_code, 422)
+        with self.assertRaises(HTTPException) as bad_hash:
+            asyncio.run(routes.start_training(TrainingStartRequest(
+                action_manifest_hash="not-a-digest",
+            )))
+        self.assertEqual(bad_hash.exception.status_code, 422)
+
+    def test_direct_start_persists_the_hash_sealed_by_trainer(self):
+        def start(config, fresh_start=False):
+            config.action_manifest_hash = "c" * 64
+            self.trainer.config = config
+            self.trainer.fresh_start = fresh_start
+
+        self.trainer.start = start
+        result = asyncio.run(routes.start_training(TrainingStartRequest()))
+        persisted = json.loads(
+            (routes.TRAINING_STATE_DIR / "last_start_request.json").read_text()
+        )
+        self.assertEqual("c" * 64, persisted["action_manifest_hash"])
+        self.assertEqual("c" * 64, result["action_manifest_hash"])
+
+    def test_launch_manifest_conflict_is_an_actionable_http_409(self):
+        def reject(_config, fresh_start=False):
+            raise ValueError(
+                "ordered actions changed; same-count reorders cannot resume"
+            )
+
+        self.trainer.start = reject
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(routes.start_training(TrainingStartRequest()))
+        self.assertEqual(409, caught.exception.status_code)
+        self.assertIn("same-count reorders", caught.exception.detail)
+        self.assertFalse(
+            (routes.TRAINING_STATE_DIR / "last_start_request.json").exists()
+        )
 
 
 if __name__ == "__main__":

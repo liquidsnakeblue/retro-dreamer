@@ -23,6 +23,7 @@ from typing import Awaitable, Callable, Optional
 
 import yaml
 
+from backend.action_manifest import build_action_manifest, load_action_manifest
 from backend.training.config import TrainingConfig
 
 
@@ -179,6 +180,12 @@ class TrainingPlanner:
             blockers = "; ".join(readiness.get("blockers") or ["game is not trainable"])
             raise PlannerError(409, f"game is not trainable: {blockers}")
         self._validate_workspace(focused)
+        workspace_actions = ((focused.get("configs") or {}).get("actions.json") or {})
+        try:
+            current_manifest = build_action_manifest(options.game_id, workspace_actions)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise PlannerError(409, f"invalid action manifest: {exc}") from exc
+        current_action_hash = current_manifest["sha256"]
 
         live = studio.get("training") or {}
         live_state = str(live.get("state") or "idle")
@@ -195,7 +202,9 @@ class TrainingPlanner:
         head = brain.get("head")
         resume = bool(head) and not options.fresh_start
         if resume:
-            effective = self._resolved_resume_settings(head, focused, options)
+            effective = self._resolved_resume_settings(
+                head, focused, options, current_action_hash
+            )
         else:
             effective = self._new_settings(studio, focused, options)
 
@@ -212,6 +221,7 @@ class TrainingPlanner:
             "fresh_start": options.fresh_start,
             "game_id": options.game_id,
             "initial_state": initial_state,
+            "action_manifest_hash": current_action_hash,
             "resume_prefill": effective["resume_prefill"],
         }
         route = "/api/training/switch" if switching else "/api/training/start"
@@ -255,6 +265,7 @@ class TrainingPlanner:
                 "strategy": launch_strategy,
                 "initial_state": initial_state,
                 "fresh_start": options.fresh_start,
+                "action_manifest_hash": current_action_hash,
             },
             "superseded_plan_ids": [],
             "head": head_summary,
@@ -348,7 +359,11 @@ class TrainingPlanner:
         return values
 
     def _resolved_resume_settings(
-        self, head: dict, focused: dict, options: PlanOptions
+        self,
+        head: dict,
+        focused: dict,
+        options: PlanOptions,
+        current_action_hash: str,
     ) -> dict:
         path_text = head.get("resolved_config")
         if not path_text or not Path(path_text).is_file():
@@ -361,6 +376,46 @@ class TrainingPlanner:
         algo = resolved.get("algo") or {}
         env = resolved.get("env") or {}
         wrapper = env.get("wrapper") or {}
+        saved_manifest_path = wrapper.get("action_manifest")
+        saved_action_hash = wrapper.get("action_manifest_hash")
+        if not saved_manifest_path or not saved_action_hash:
+            raise PlannerError(
+                409,
+                "legacy checkpoint has no immutable action manifest; action ordering "
+                "is unprovable, so use a fresh plan or an explicit audited legacy seal",
+            )
+        try:
+            saved_manifest_path = Path(saved_manifest_path)
+            if not saved_manifest_path.is_absolute():
+                saved_manifest_path = (Path(path_text).parent / saved_manifest_path).resolve()
+            saved_manifest = load_action_manifest(
+                saved_manifest_path,
+                expected_game_id=options.game_id,
+                expected_hash=saved_action_hash,
+            )
+        except (OSError, TypeError, ValueError, KeyError) as exc:
+            raise PlannerError(409, f"resumable action manifest is invalid: {exc}") from exc
+        catalog_action_hash = head.get("action_manifest_hash")
+        if not catalog_action_hash:
+            raise PlannerError(
+                409,
+                "resumable catalog snapshot has no immutable action-manifest "
+                "binding; use a fresh plan or an explicit audited legacy seal",
+            )
+        if catalog_action_hash != saved_manifest["sha256"]:
+            raise PlannerError(
+                409,
+                "resumable config action manifest conflicts with the catalog's "
+                f"write-once binding: catalog {catalog_action_hash}, "
+                f"config {saved_manifest['sha256']}",
+            )
+        if saved_manifest["sha256"] != current_action_hash:
+            raise PlannerError(
+                409,
+                "ordered actions changed since this checkpoint: "
+                f"saved {saved_manifest['sha256']}, current {current_action_hash}; "
+                "same-count reorders and remaps cannot resume",
+            )
         recurrent_size = (((algo.get("world_model") or {}).get("recurrent_model") or {})
                           .get("recurrent_state_size"))
         model_size = _ARCHITECTURE_BY_RECURRENT_SIZE.get(recurrent_size)
@@ -401,11 +456,11 @@ class TrainingPlanner:
             raise PlannerError(
                 409, "resumable head has no valid buffer-meta.json; compatibility is unknown"
             ) from exc
-        action_rows = (((focused.get("configs") or {}).get("actions.json") or {})
-                       .get("actions") or [])
         expected_meta = {
+            "format": "retro-dreamer-buffer-meta-v2",
             "num_envs": values["num_envs"],
-            "action_count": len(action_rows),
+            "action_count": len(saved_manifest["actions"]),
+            "action_manifest_hash": saved_manifest["sha256"],
         }
         if buffer_meta != expected_meta:
             raise PlannerError(

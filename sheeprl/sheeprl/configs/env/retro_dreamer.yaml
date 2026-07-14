@@ -28,3 +28,8 @@ wrapper:
   game_id: ???
   game_dir: ???
   initial_state: ???
+  # Launch-bound, content-addressed action semantics. Legacy checkpoints that
+  # lack this field intentionally fail closed instead of reading actions.json.
+  action_manifest: ???
+  action_manifest_hash: ???
+  allow_mutable_actions: false

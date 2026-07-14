@@ -1,7 +1,8 @@
 """Generalized retro environment wrapper for DreamerV3 via SheepRL.
 
 Replaces the F-Zero-specific wrappers with a single game-agnostic class.
-Loads per-game config from the games/ directory: actions.json, training.json, data.json.
+Training loads actions from a launch-bound immutable manifest; explicit
+authoring tools may opt into the mutable actions.json workspace file.
 """
 
 import json
@@ -16,6 +17,7 @@ import retro
 from gymnasium import spaces
 
 from sheeprl.utils.imports import _IS_STABLE_RETRO_AVAILABLE
+from sheeprl.action_manifest import load_action_manifest
 
 if not _IS_STABLE_RETRO_AVAILABLE:
     raise ModuleNotFoundError("stable-retro is required for retro-dreamer")
@@ -36,7 +38,7 @@ class RetroDreamerWrapper(gym.Wrapper):
 
     - Registers a custom integration directory so retro can find the game
     - Loads training.json for reward shaping and done conditions
-    - Loads actions.json for the discrete action mapping
+    - Loads an immutable action manifest for the discrete action mapping
     - Produces Dict observations with key "rgb" in CHW uint8 format
     - Discrete action space (len = number of action combos)
     """
@@ -52,6 +54,9 @@ class RetroDreamerWrapper(gym.Wrapper):
         frame_skip: int = 4,
         grayscale: bool = False,
         seed: Optional[int] = None,
+        action_manifest: str = "",
+        action_manifest_hash: str = "",
+        allow_mutable_actions: bool = False,
         **kwargs,
     ):
         if kwargs:
@@ -100,16 +105,46 @@ class RetroDreamerWrapper(gym.Wrapper):
         # of zero-signal training.
         validate_training_config(game_id, self.training_config)
 
-        # Load actions config — our extension. Rows are compiled and
-        # validated against the live core's button list after env creation.
-        actions_path = self.game_dir / "actions.json"
-        if actions_path.exists():
-            with open(actions_path) as f:
-                actions_data = json.load(f)
-            self._action_defs = actions_data["actions"]
+        # Training/evaluation binds to the exact ordered actions captured at
+        # launch.  Reading actions.json directly is reserved for explicit
+        # authoring probes: otherwise a file edit (or worker reconstruction)
+        # could silently change the meaning of an existing policy's outputs.
+        if action_manifest:
+            if not action_manifest_hash:
+                raise ValueError(
+                    "action_manifest_hash is required with action_manifest; "
+                    "an unanchored manifest path can be rebound"
+                )
+            manifest = load_action_manifest(
+                action_manifest,
+                expected_game_id=game_id,
+                expected_hash=action_manifest_hash,
+            )
+            self.action_manifest = str(Path(action_manifest))
+            self.action_manifest_hash = manifest["sha256"]
+            self._action_defs = manifest["actions"]
+        elif allow_mutable_actions:
+            if action_manifest_hash:
+                raise ValueError(
+                    "action_manifest_hash was supplied without an action_manifest path"
+                )
+            actions_path = self.game_dir / "actions.json"
+            if actions_path.exists():
+                with open(actions_path) as f:
+                    actions_data = json.load(f)
+                self._action_defs = actions_data["actions"]
+            else:
+                # Authoring-only fallback: let retro expose FILTERED actions.
+                self._action_defs = None  # handled below after env creation
+            self.action_manifest = ""
+            self.action_manifest_hash = ""
         else:
-            # Fallback: use retro's FILTERED actions (let retro decide)
-            self._action_defs = None  # handled below after env creation
+            raise ValueError(
+                "immutable action_manifest is required for training and evaluation; "
+                "this run/checkpoint is not bound to exact ordered actions. "
+                "Migrate the legacy checkpoint or set allow_mutable_actions=true "
+                "only in an explicit authoring tool."
+            )
 
         # Determine state; preload raw bytes for every rotation entry so
         # reset() can swap tracks without touching retro's path resolution
