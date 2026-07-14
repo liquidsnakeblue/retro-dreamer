@@ -248,7 +248,8 @@ with the Bash tool via curl.
 
 Job contract (all /api/tools/* POSTs): the response is `{"job_id": "..."}`.
 Poll `GET /api/tools/jobs/<job_id>` every 10-15s; status goes
-queued -> running -> done|error. Read `.result` when done. On error, the log
+running -> done|failed (code reality in backend/tools.py: `done` on exit 0,
+`failed` otherwise). Read `.result` when done. On failure, the log
 is at training-state/tools/<job_id>/output.log — read it before retrying.
 Probes take 1-3 minutes; captures and walkers longer.
 
