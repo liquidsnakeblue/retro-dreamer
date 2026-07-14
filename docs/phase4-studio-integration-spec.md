@@ -123,6 +123,21 @@ F. **Product-harness vision check** (added 2026-07-14 after the Pam vision test)
    association ambiguity), then two-in-one-turn to reproduce the reversal, plus inspection of
    the :8082 proxy's image re-injection ordering. Gate F reopens only against that protocol.
 
+   **GATE F RETEST (2026-07-14, dwight): PASS under the de-contaminated protocol** (full
+   diagnosis: docs/vision-association-diagnosis.md, commit b8c55fc). Real product path
+   (claude-local → :8082): 0 reversals across 6 single-image + 3 double-image runs + 1 raw
+   two-image /v1/messages call — 10/10 name-to-image bindings correct; background colors
+   10/10; unconfounded rendered text read cleanly 6/6. The original FAIL is attributed to a
+   confluence: (1) the key leaked in this spec primed the answer, (2) gameplay-vs-pure-black
+   is maximally confusable ("black" attaches to either), (3) the proxy strips the explicit
+   tool_use_id↔image binding (order alone carries it — reliable in practice). CAVEATS now
+   binding on copilot design: never gate a frame check on fine in-frame text (27B OCR weak —
+   "CIRCLE" misread while colors stayed perfect); ground-truth keys are never published in
+   repo docs. Proxy binding-hardening (co-locate + label hoisted images) filed as follow-up
+   card proxy-binding-hardening — approved in principle, deferred to a quiet window because
+   :8082 is live shared infra. Primer vision-fallback language is UNBLOCKED by this pass;
+   bundle its enablement with the copilot-grounding-e primer revision (one change, one review).
+
 ## Non-goals (defer; do not build)
 
 Full onboarding flow, arbitrary config edits, stop/promote approval flows, durable chat
