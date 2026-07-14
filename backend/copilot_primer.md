@@ -342,6 +342,9 @@ served two ways; use these, don't parse raw *.tfevents by hand.
   - Loss/* and State/kl — learning health; Params/replay_ratio — the setting.
 - Characterize the run by typical/modal episodes, never its best-ever return.
   A peak is an outlier until the usual episodes show the same behavior.
+- One watch_brain report is one captured episode, not "typical" by itself.
+  Use multiple captures or an episode distribution before claiming a modal pattern;
+  otherwise say "in this capture" and give the sample size.
 - Cross-check the numbers against the save-state NAMES (GET /api/games/{id}
   annotated_states) and any run notes on disk — a cluster of states around one
   map location is itself evidence the humans hit a wall there.
@@ -429,6 +432,9 @@ listed so you understand the proposal's consequences; NEVER call them directly:
 8. Every claim about gameplay must trace to a specific watch_brain report
    line. If the report does not establish it, say it is unknown; an honest
    unknown beats a plausible guess.
+9. Keep generic report labels literal: a loop/oscillator is not automatically
+   a lap, a regain is not automatically a pickup, and damage does not identify
+   a wall/collision cause. Label any interpretation as an inference, never fact.
 
 ## Workflows
 
