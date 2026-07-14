@@ -139,6 +139,21 @@ async def stop_training():
     if _trainer is None:
         raise HTTPException(500, "Trainer not initialized")
     ack = _trainer.stop()  # graceful by default; SIGTERM fallback inside
+    # Stamp intent: the overnight watchdog restarts training whenever it sees
+    # it silently go idle, but it could not tell a USER stop from a crash
+    # (it re-armed ~2min after a UI Stop button click — confirmed in the
+    # wild). Drop a fresh marker so the watchdog knows this idle is
+    # intentional and must NOT be auto-resumed.
+    try:
+        import json as _json
+        import time as _time
+        from pathlib import Path
+
+        state_dir = Path(__file__).resolve().parent.parent.parent / "training-state"
+        (state_dir / "stopped_by_user.json").write_text(_json.dumps(
+            {"ts": _time.time(), "reason": "manual_stop"}, indent=2))
+    except Exception as exc:
+        print(f"[API] failed to stamp stop intent: {exc}")
     return {"status": "stopped", "final_snapshot": ack}
 
 

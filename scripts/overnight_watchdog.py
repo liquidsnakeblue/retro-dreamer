@@ -29,6 +29,21 @@ KEEP_ARCHIVES = 8
 
 ROOT = Path(__file__).resolve().parent.parent
 LAST_REQUEST = ROOT / "training-state" / "last_start_request.json"
+STOP_MARKER = ROOT / "training-state" / "stopped_by_user.json"
+
+
+def user_stopped_after(t: float) -> bool:
+    """True iff /training/stop stamped a marker newer than time t.
+
+    Lets the watchdog tell a USER-initiated stop (manual UI Stop) from a
+    crash: the API writes stopped_by_user.json on every /training/stop. If
+    that marker postdates our last 'training' sighting, the idle is
+    intentional and must NOT be auto-resumed."""
+    try:
+        m = json.loads(STOP_MARKER.read_text())
+        return float(m.get("ts", 0)) > t
+    except Exception:
+        return False
 
 
 def resume_body() -> bytes:
@@ -82,6 +97,7 @@ def main():
     restarts = 0
     last_restart_t = 0.0
     seen_training = False
+    last_training_seen_t = 0.0
     last_archive = 0.0
     log(f"watchdog up (poll {POLL}s, archive {ARCHIVE_EVERY}s, max restarts {MAX_RESTARTS})")
     while True:
@@ -90,9 +106,23 @@ def main():
             state = st.get("state")
             if state == "training":
                 seen_training = True
+                last_training_seen_t = time.time()
                 # a restart that survived 10+ min resets nothing; only note health
             bad = state == "error" or (seen_training and state == "idle")
             if bad:
+                # User-initiated stop? /training/stop dropped a fresh marker;
+                # if it postdates our last 'training' sighting, do NOT restart.
+                if user_stopped_after(last_training_seen_t):
+                    log("idle/error after user /training/stop — not restarting; "
+                        "will resume only on the next explicit /training/start")
+                    try:
+                        STOP_MARKER.unlink()
+                    except OSError:
+                        pass
+                    seen_training = False
+                    last_training_seen_t = 0.0
+                    time.sleep(POLL)
+                    continue
                 if restarts >= MAX_RESTARTS:
                     log(f"state={state} but restart cap reached — giving up. "
                         f"error={st.get('error_message','')[:200]}")
