@@ -13,7 +13,7 @@ type ActiveTab = 'metrics' | 'live' | 'config' | 'copilot'
 
 export default function App() {
   const [selectedGame, setSelectedGame] = useState('FZero-Snes')
-  const [activeTab, setActiveTab] = useState<ActiveTab>('metrics')
+  const [activeTab, setActiveTab] = useState<ActiveTab>('copilot')
   const { connected, status, videos } = useTrainingPolling()
 
   return (
@@ -61,6 +61,11 @@ export default function App() {
           {/* Tab bar */}
           <div className="bg-retro-surface border border-retro-border rounded-t-lg flex shrink-0">
             <TabButton
+              label="Copilot"
+              active={activeTab === 'copilot'}
+              onClick={() => setActiveTab('copilot')}
+            />
+            <TabButton
               label="Metrics"
               active={activeTab === 'metrics'}
               onClick={() => setActiveTab('metrics')}
@@ -74,11 +79,6 @@ export default function App() {
               label="Game Config"
               active={activeTab === 'config'}
               onClick={() => setActiveTab('config')}
-            />
-            <TabButton
-              label="Copilot"
-              active={activeTab === 'copilot'}
-              onClick={() => setActiveTab('copilot')}
             />
           </div>
 
