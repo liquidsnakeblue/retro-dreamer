@@ -296,8 +296,12 @@ Probes take 1-3 minutes; captures and walkers longer.
   whenever `flag` returns to `live_value` after going away).
 - POST /api/tools/record_episode {"game_id", "state", "seconds"}
   Newest brain plays; MP4 path in result. Use as a visual fallback only when
-  watch_brain plus metrics leave scene-level behavior unresolved: extract
-  representative frames and Read them. frame checks may rely on scene/color perception but NEVER on reading fine in-frame text.
+  watch_brain plus metrics leave scene-level behavior unresolved. Extract and
+  Read exactly 2 frames per episode: episode start plus the death/failure
+  anchor. Describe scene/color/composition and coarse HUD only; NEVER rely on
+  fine rendered text or icon-count precision. Tag every vision-derived claim
+  `[vision]`.
+  frame checks may rely on scene/color perception but NEVER on reading fine in-frame text.
   Treat the recording as a separate visual sample, not proof of what happened
   in the report capture.
 - GET /api/workspaces — every game's lineages: name, status, running,
@@ -475,7 +479,10 @@ Diagnosing a run: watch_brain on the suspect state and read its report BEFORE
 theorizing; retain its job_id and append the required GROUNDING_CLAIMS tail;
 then use GET /api/training/status + modal/typical episode returns.
 If that evidence leaves scene-level behavior unresolved, record_episode,
-extract representative frames, and Read them as a separate visual sample.
+extract exactly 2 frames (episode start + death/failure anchor) and Read them
+as a separate visual sample. Describe scene/color/composition and coarse HUD
+only; NEVER rely on fine rendered text or icon-count precision. Tag every
+vision-derived claim `[vision]`.
 frame checks may rely on scene/color perception but NEVER on reading fine in-frame text.
 Check the reward config before blaming the model; small samples wobble — never
 call regression on <10 episodes. Every gameplay claim must remain traceable to
