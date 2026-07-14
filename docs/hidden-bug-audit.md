@@ -167,6 +167,10 @@ intended scale is right once a capture exists.
    confirm movement. Low impact (small reward, real signal is stage/pearls).
 5. **[SUSPECT, trivial] Mario unused signed vars** (`scrolling` 16–21, levelHi/Lo
    signed). No active effect; re-check if ever wired to reward. Low impact.
+   **Re-check flag (god ack 2026-07-14):** if `scrolling`, `levelHi`, or
+   `levelLo` is ever wired into a reward/done config, re-validate its type and
+   semantic first — `scrolling` (observed 16–21) does not behave like a 0/1
+   flag, and signed level indices are suspect.
 
 ## Code bugs found along the way
 **None** in scope. The reward/done/op machinery (`retro_dreamer.py:277-384`,
@@ -188,3 +192,65 @@ non-config code defect surfaced.
 **Definition of done met:** every onboarded game swept; verdict on every
 constant; ranked findings with evidence + proposed fixes; no config fixes
 applied (god acks each); no code bugs to commit.
+
+---
+
+## Resolution log (god-acked follow-ups, 2026-07-14)
+
+### Finding F2 — FZero-Test `max_speed` 500 → 4500 (APPLIED, god ack)
+**Applied** to `games/FZero-Test/training.json` (commit below). FZero-Test and
+FZero-Snes share a **md5-identical** `data.json`
+(`5f66c1a37ffd3a31f154ddb370fdd7fe` — confirmed on both files), so the observed
+speed band is 66–4129 for both; Test had the identical saturated-reward bug.
+Mirrors god's FZero-Snes fix 21d112a. Before/after reward at real speeds
+(`reward += 12·0.1·(min(speed/max_speed,1))²`, same curve table as the Snes fix):
+
+| speed | old (max=500) | new (max=4500) |
+|---|---|---|
+| 66 | 0.31 | 0.10 |
+| 500 | 12.10 ← saturated from here up | 0.25 |
+| 1500 | 12.10 | 1.43 |
+| 3140 (avg) | 12.10 | 5.94 |
+| 4129 (obs max) | 12.10 | 10.20 |
+
+Restores the go-faster gradient across the real racing band. E2E confirmation =
+next FZero-Test training run.
+
+### Finding F1 — FZero-Snes health done-condition (PURSUED — see blocker)
+Pursued per ack. The plan was a CPU-only capture reaching an actual crash to
+read the true health floor. **Blocker surfaced (needs god decision, below):**
+the only capture tool, `_retro_ram_capture.py`, requires a trained checkpoint to
+*drive* the agent (it loads `state["world_model"]`/`state["actor"]`). FZero-Snes
+does have checkpoints, so a capture is feasible here — but one capture from the
+*current* brain (which pam-engine-test showed *survives* without crashing) will
+likely reproduce "health floors at 468, never hits game-over." Reading the true
+game-over floor needs either a deliberately-bad play trace or manual play to
+death, which the capture tooling doesn't drive. **Proposed fallback per ack:**
+set `reference` from the observed damage-event floor (468) minus margin until a
+death capture exists — but that's a config change awaiting god's ack on the
+number. Escalated, not applied.
+
+### Finding F3 — 1942 + 1943 coverage gap (BLOCKED — needs god decision)
+**Blocker:** `_retro_ram_capture.py:50-79` requires a checkpoint path
+(`sys.argv[1]`) and loads a trained actor/world_model to drive the emulator.
+**1942-Nes-v0 and 1943-Nes-v0 have zero checkpoints and are not in the catalog**
+(no `sheeprl/logs/runs/dreamer_v3/<game>/`, no catalog row). So the permitted
+"CPU-only ram_capture" cannot run for them without one of:
+- **(i)** a code change to `_retro_ram_capture.py` adding a random-action /
+  untrained mode (no checkpoint load) — small, but it's a code change to a
+  tooling script, out of the "apply no config / fix code bugs only" lane; OR
+- **(ii)** training the games first to produce a checkpoint — **forbidden** by
+  the task boundaries (no training actions).
+
+**Escalated to god** (see outbox): pick (i) [I patch the capture tool to support
+untrained random play, then capture + re-audit], (ii) [forbidden], or defer
+1942/1943 validation until the games are onboarded with a real brain. No
+verdict possible for these two games until resolved.
+
+### Finding F4 — LM `score` `>n8` (deferred per ack)
+Folded into F3's blocker: cannot cheaply force a score without a driven capture,
+and no opportunistic capture landed. Left as documented SUSPECT; low impact.
+
+### Finding F5 — Mario unused vars (flagged)
+Re-check line added to finding 5 above (re-validate type/semantic if ever wired
+to reward). No action.
