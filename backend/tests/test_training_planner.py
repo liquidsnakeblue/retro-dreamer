@@ -104,6 +104,11 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             "  wrapper:\n"
             "    initial_state: start+hard\n"
         )
+        replay_path = Path(self.temp.name) / "lineage" / "replay"
+        replay_path.mkdir(parents=True)
+        (replay_path.parent / "buffer-meta.json").write_text(
+            json.dumps({"num_envs": 6, "action_count": 1})
+        )
         self.builder.state["focused_game"]["brain"] = {
             "has_brain": True,
             "active_lineage": "main",
@@ -111,6 +116,7 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
                 "snapshot_id": 7,
                 "step": 12345,
                 "replay_available": True,
+                "replay_path": str(replay_path),
                 "resolved_config": str(config_path),
             },
         }
@@ -164,6 +170,18 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             self.planner.create_plan({"game_id": "Focus-Game", "model_size": "small"})
         with self.assertRaisesRegex(PlannerError, "states are locked"):
             self.planner.create_plan({"game_id": "Focus-Game", "states": ["start"]})
+
+    def test_resume_rejects_incompatible_buffer_metadata_before_proposal(self):
+        self.add_head()
+        replay_path = Path(
+            self.builder.state["focused_game"]["brain"]["head"]["replay_path"]
+        )
+        (replay_path.parent / "buffer-meta.json").write_text(
+            json.dumps({"num_envs": 6, "action_count": 99})
+        )
+        with self.assertRaisesRegex(PlannerError, "replay buffer is incompatible") as caught:
+            self.planner.create_plan({"game_id": "Focus-Game"})
+        self.assertEqual(caught.exception.status_code, 409)
 
     def test_unknown_resumed_architecture_is_rejected(self):
         self.add_head(recurrent_size=777)
@@ -239,6 +257,22 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
         release.set()
         await first
         self.assertEqual(len(calls), 1)
+
+    async def test_post_execution_state_failure_keeps_confirmed_receipt(self):
+        proposal = self.planner.create_plan({"game_id": "Focus-Game"})
+        token = self.planner.create_approval_session()
+
+        async def execute(_route, _body):
+            self.builder.raise_missing = True
+            return {"status": "started"}
+
+        result = await self.planner.confirm(proposal["id"], token, execute)
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(result["execution"], {"status": "started"})
+        self.assertIsNone(result["studio_state"])
+        self.assertIn("fresh studio state", result["warning"])
+        with self.assertRaisesRegex(PlannerError, "already confirmed"):
+            await self.planner.confirm(proposal["id"], token, execute)
 
     async def test_cancel_is_one_time_and_has_zero_training_mutations(self):
         proposal = self.planner.create_plan({"game_id": "Focus-Game"})

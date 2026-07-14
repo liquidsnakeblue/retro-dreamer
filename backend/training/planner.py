@@ -194,7 +194,7 @@ class TrainingPlanner:
         head = brain.get("head")
         resume = bool(head) and not options.fresh_start
         if resume:
-            effective = self._resolved_resume_settings(head, options)
+            effective = self._resolved_resume_settings(head, focused, options)
         else:
             effective = self._new_settings(studio, focused, options)
 
@@ -315,7 +315,9 @@ class TrainingPlanner:
         self._validate_numeric(values)
         return values
 
-    def _resolved_resume_settings(self, head: dict, options: PlanOptions) -> dict:
+    def _resolved_resume_settings(
+        self, head: dict, focused: dict, options: PlanOptions
+    ) -> dict:
         path_text = head.get("resolved_config")
         if not path_text or not Path(path_text).is_file():
             raise PlannerError(409, "resumable head has no readable resolved config")
@@ -357,6 +359,27 @@ class TrainingPlanner:
             raise PlannerError(409, "states are locked by the resumable head config")
         if not head.get("replay_available"):
             raise PlannerError(409, "resumable head replay is unavailable; a fresh plan is required")
+        replay_path = head.get("replay_path")
+        if not replay_path:
+            raise PlannerError(409, "resumable head has no replay path")
+        buffer_meta_path = Path(replay_path).parent / "buffer-meta.json"
+        try:
+            buffer_meta = json.loads(buffer_meta_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PlannerError(
+                409, "resumable head has no valid buffer-meta.json; compatibility is unknown"
+            ) from exc
+        action_rows = (((focused.get("configs") or {}).get("actions.json") or {})
+                       .get("actions") or [])
+        expected_meta = {
+            "num_envs": values["num_envs"],
+            "action_count": len(action_rows),
+        }
+        if buffer_meta != expected_meta:
+            raise PlannerError(
+                409,
+                f"replay buffer is incompatible: saved {buffer_meta}, current {expected_meta}",
+            )
         return values
 
     @staticmethod
@@ -493,14 +516,24 @@ class TrainingPlanner:
             self._set_status(plan_id, "failed")
             raise
         self._set_status(plan_id, "confirmed", expected="confirming")
-        studio_state = self.state_builder.build(payload.game_id, projection="compact")
-        return {
+        state_warning = None
+        try:
+            studio_state = self.state_builder.build(payload.game_id, projection="compact")
+        except Exception:
+            # The mutation receipt remains authoritative. A failed ambient read
+            # must not turn a successful start into an apparent failed action.
+            studio_state = None
+            state_warning = "Training executed, but fresh studio state is temporarily unavailable."
+        result = {
             "status": "confirmed",
             "plan_id": payload.plan_id,
             "execution": execution,
             "studio_state": studio_state,
             "intent": {"type": "open_tab", "tab": "metrics"},
         }
+        if state_warning:
+            result["warning"] = state_warning
+        return result
 
     def _set_status(self, plan_id: str, status: str, expected: Optional[str] = None):
         with self._lock:

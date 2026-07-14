@@ -12,6 +12,9 @@ from backend.training.config import TrainingConfig
 
 class FakeGameManager:
     def __init__(self):
+        self.states = [
+            {"file": "start", "label": "Start", "group": "training"}
+        ]
         self.training = {
             "reward": {"variables": {"score": {"reward": 1}}},
             "done": {"variables": {"lives": {"op": "equal", "reference": 0}}},
@@ -45,10 +48,8 @@ class FakeGameManager:
             "display_name": "Focus Game",
             "source": "custom",
             "default_state": "start",
-            "states": ["start"],
-            "annotated_states": [
-                {"file": "start", "label": "Start", "group": "training"}
-            ],
+            "states": [state["file"] for state in self.states],
+            "annotated_states": copy.deepcopy(self.states),
             "config_files": ["data.json", "actions.json", "training.json", "metadata.json"],
         }
 
@@ -70,8 +71,10 @@ class StudioStateBuilderTest(unittest.TestCase):
         checkpoint.write_text("fixture")
         replay = root / "replay"
         replay.mkdir()
+        self.replay = replay
         resolved = root / "config.yaml"
         resolved.write_text("algo:\n  recurrent_state_size: 512\n")
+        self.resolved = resolved
         db_path = root / "catalog.sqlite"
         con = catalog.connect(db_path)
         con.execute("INSERT INTO games (id,display_name) VALUES (?,?)", ("Focus-Game", "Focus Game"))
@@ -136,6 +139,21 @@ class StudioStateBuilderTest(unittest.TestCase):
         config_changed = self.builder.build("Focus-Game")
         self.assertNotEqual(compact["revision"], config_changed["revision"])
         self.trainer.config.batch_length -= 1
+
+        self.manager.states.append(
+            {"file": "alternate", "label": "Alternate", "group": "training"}
+        )
+        state_changed = self.builder.build("Focus-Game")
+        self.assertNotEqual(compact["revision"], state_changed["revision"])
+        self.manager.states.pop()
+
+        self.replay.rmdir()
+        replay_changed = self.builder.build("Focus-Game")
+        self.assertNotEqual(compact["revision"], replay_changed["revision"])
+
+        self.resolved.write_text("algo:\n  recurrent_state_size: 1024\n")
+        resolved_changed = self.builder.build("Focus-Game")
+        self.assertNotEqual(compact["revision"], resolved_changed["revision"])
 
         self.manager.training["reward"]["variables"]["bonus"] = {"reward": 2}
         changed = self.builder.build("Focus-Game")

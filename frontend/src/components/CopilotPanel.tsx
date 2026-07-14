@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { TrainingStatus } from '../hooks/useTrainingSocket'
@@ -81,25 +81,32 @@ export function CopilotPanel({
   const lastSeq = useRef(0)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    const controller = new AbortController()
+  const initializeApprovalSession = useCallback(async (signal?: AbortSignal) => {
     setApprovalError(null)
-    fetch('/api/training/approval-session', {
-      method: 'POST',
-      credentials: 'same-origin',
-      signal: controller.signal,
-    }).then((res) => {
+    try {
+      const res = await fetch('/api/training/approval-session', {
+        method: 'POST',
+        credentials: 'same-origin',
+        signal,
+      })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       // The server returns status only. The approval capability remains in an
       // HttpOnly cookie, outside JavaScript and outside the copilot process.
       setApprovalReady(true)
-    }).catch((error: unknown) => {
-      if (error instanceof DOMException && error.name === 'AbortError') return
-      setApprovalReady(false)
-      setApprovalError(error instanceof Error ? error.message : 'session initialization failed')
-    })
-    return () => controller.abort()
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        setApprovalReady(false)
+        setApprovalError(error instanceof Error ? error.message : 'session initialization failed')
+      }
+      throw error
+    }
   }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void initializeApprovalSession(controller.signal).catch(() => {})
+    return () => controller.abort()
+  }, [initializeApprovalSession])
 
   useEffect(() => {
     const t = setInterval(async () => {
@@ -177,10 +184,15 @@ export function CopilotPanel({
   async function brokerAction(proposal: TrainingStartProposal, action: 'confirm' | 'cancel') {
     updateProposalAction(proposal.id, { status: action === 'confirm' ? 'confirming' : 'cancelling' })
     try {
-      const res = await fetch(
+      const request = () => fetch(
         `/api/training/plans/${encodeURIComponent(proposal.id)}/${action}`,
         { method: 'POST', credentials: 'same-origin' },
       )
+      let res = await request()
+      if (res.status === 403) {
+        await initializeApprovalSession()
+        res = await request()
+      }
       const response = await readJson(res)
       if (!res.ok) throw new Error(apiError(response, res.status))
 
@@ -200,9 +212,14 @@ export function CopilotPanel({
           observedAt: confirmed.studio_state.generated_at,
         })
       }
-      await onTrainingRefresh()
       if (confirmed.intent?.type === 'open_tab' && confirmed.intent.tab === 'metrics') {
         onOpenMetrics()
+      }
+      try {
+        await onTrainingRefresh()
+      } catch {
+        // The broker receipt is authoritative. Polling will reconcile ambient
+        // training state without downgrading a successfully confirmed card.
       }
     } catch (error) {
       updateProposalAction(proposal.id, {

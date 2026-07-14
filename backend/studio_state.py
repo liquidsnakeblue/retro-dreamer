@@ -20,6 +20,29 @@ def _hash(value) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
+def _path_fingerprint(path_value, *, include_text: bool = False):
+    """Material identity without leaking an absolute path into compact state."""
+    if not path_value:
+        return None
+    path = Path(path_value)
+    try:
+        stat = path.stat()
+    except OSError:
+        return {"exists": False}
+    fingerprint = {
+        "exists": True,
+        "kind": "directory" if path.is_dir() else "file",
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+    if include_text and path.is_file():
+        try:
+            fingerprint["content"] = _hash(path.read_text())
+        except (OSError, UnicodeError):
+            fingerprint["content"] = None
+    return fingerprint
+
+
 def model_size_advice() -> dict:
     """Existing GPU advice as a reusable code-owned fact source."""
     import torch
@@ -152,22 +175,40 @@ class StudioStateBuilder:
                     "head": None,
                 }
                 if head:
+                    session = con.execute(
+                        "SELECT resolved_config FROM sessions WHERE id=?",
+                        (head["session_id"],),
+                    ).fetchone()
+                    resolved_config = session["resolved_config"] if session else None
+                    replay_path = head["replay_path"]
+                    replay_available = bool(replay_path and Path(replay_path).exists())
+                    buffer_meta = (
+                        Path(replay_path).parent / "buffer-meta.json"
+                        if replay_path else None
+                    )
+                    compatibility_revision = _hash({
+                        "checkpoint": _path_fingerprint(head["checkpoint_path"]),
+                        "replay": _path_fingerprint(replay_path),
+                        "buffer_meta": _path_fingerprint(buffer_meta, include_text=True),
+                        "resolved_config": _path_fingerprint(
+                            resolved_config, include_text=True
+                        ),
+                        "validation_status": head["validation_status"],
+                        "config_hash": head["config_hash"],
+                    })
                     item["head"] = {
                         "snapshot_id": head["id"],
                         "step": head["step"],
                         "created_at": head["created_at"],
-                        "replay_available": bool(head["replay_path"] and Path(head["replay_path"]).exists()),
+                        "replay_available": replay_available,
                         "validation_status": head["validation_status"],
+                        "compatibility_revision": compatibility_revision,
                     }
                     if full:
-                        session = con.execute(
-                            "SELECT resolved_config FROM sessions WHERE id=?",
-                            (head["session_id"],),
-                        ).fetchone()
                         item["head"].update({
                             "checkpoint_path": head["checkpoint_path"],
-                            "replay_path": head["replay_path"],
-                            "resolved_config": session["resolved_config"] if session else None,
+                            "replay_path": replay_path,
+                            "resolved_config": resolved_config,
                         })
                 lineages.append(item)
             active_id = game["active_lineage_id"]
@@ -206,6 +247,17 @@ class StudioStateBuilder:
         states = [{key: state.get(key) for key in
                    ("file", "label", "group", "description", "objective")
                    if state.get(key) is not None} for state in annotated]
+        games_dir = getattr(self.game_manager, "games_dir", None)
+        state_manifest = []
+        for state in states:
+            filename = state.get("file")
+            artifact = None
+            if games_dir is not None and filename:
+                state_name = filename if filename.endswith(".state") else f"{filename}.state"
+                artifact = _path_fingerprint(
+                    Path(games_dir) / game_id / "states" / state_name
+                )
+            state_manifest.append({"definition": state, "artifact": artifact})
         config_files = set(detail.get("config_files", []))
         blockers = []
         if game.get("source") != "custom":
@@ -226,7 +278,7 @@ class StudioStateBuilder:
             "states": compact_states,
             "states_truncated": len(compact_states) < len(states),
             "config": {
-                "revision": _hash(configs),
+                "revision": _hash({"configs": configs, "states": state_manifest}),
                 "files": sorted(config_files),
                 "ram_variable_count": len(data.get("info") or {}),
                 "action_count": len(actions.get("actions") or []),
@@ -295,7 +347,7 @@ class StudioStateBuilder:
             "focused_config": focused["config"]["revision"] if focused else None,
             "focused_head": {
                 key: (focused["brain"].get("head") or {}).get(key)
-                for key in ("snapshot_id", "step")
+                for key in ("snapshot_id", "step", "compatibility_revision")
             } if focused else None,
             "training": {
                 "state": training["state"],
