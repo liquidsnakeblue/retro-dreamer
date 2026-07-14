@@ -163,3 +163,26 @@ value to km/h). Picking the replacement `max_speed` is therefore a
 
 **No code/config changed for item 5** — awaiting god's call on which option
 (or whether to capture the km/h scale first).
+
+## Item 5 resolution (god, 2026-07-14)
+
+**Decision: keep quadratic mode, recalibrate `max_speed` 500 → 4500** (applied to
+`games/FZero-Snes/training.json`). Rationale: observed racing max is 4129 in a real
+1400-step capture (avg 3139.6); 4500 gives ~9% boost headroom. This is the smallest
+semantic change that restores gradient — option (a) with headroom; the quadratic
+shape (superlinear go-faster incentive) was a design choice and stays.
+
+Before/after at real speeds (norm=min(speed/max_speed,1), reward=0.1+12·norm²):
+
+| speed | old (max=500) | new (max=4500) |
+|---|---|---|
+| 66 | 0.31 | 0.10 |
+| 500 | 12.10 ← saturated from here up | 0.25 |
+| 1500 | 12.10 | 1.43 |
+| 3140 (avg) | 12.10 | 5.94 |
+| 4129 (obs max) | 12.10 | 10.20 |
+
+Known side-effect (accepted): average reward magnitude at typical speeds drops vs the
+saturated flat value, which rebalances speed vs pos (10.0) and health penalty — that is
+inherent to un-saturating. E2E confirmation = next F-Zero training run (same
+pending-verify bucket as the avg_length fix). F-Zero is parked; no run in flight.
