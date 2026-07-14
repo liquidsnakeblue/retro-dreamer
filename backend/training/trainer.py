@@ -137,6 +137,7 @@ class DreamerV3Trainer:
 
         # Active run directory (set when training starts)
         self._run_dir: Optional[Path] = None
+        self._active_run: Optional[tuple[subprocess.Popen, Path]] = None
 
         # Studio-v2: graceful-suspend channel + catalog session tracking
         self._control_dir: Optional[Path] = None
@@ -194,6 +195,8 @@ class DreamerV3Trainer:
             return
         if config:
             self.config = config
+        self.config.validate()
+        self._active_run = None
 
         self.state = TrainingState.TRAINING
         self._error_message = ""
@@ -252,6 +255,7 @@ class DreamerV3Trainer:
             except Exception:
                 pass
         self._process = None
+        self._active_run = None
         self._catalog_session_end("ended", "stopped by studio")
         if ack:
             self._catalog_register_snapshot_path(ack.get("checkpoint_path"), ack.get("step"))
@@ -299,6 +303,10 @@ class DreamerV3Trainer:
         SHEEPRL_DIR.mkdir(parents=True, exist_ok=True)
         wrapper_path.write_text(_WRAPPER_SCRIPT)
 
+        lineage_dir = STATE_DIR / "games" / game_id / "lineages" / "main"
+        retention_manifest = lineage_dir / "checkpoint-retention.json"
+        retention_root = _sheeprl_logs(game_id)
+
         # Build command
         cmd = [
             SHEEPRL_PYTHON, str(wrapper_path),
@@ -320,15 +328,17 @@ class DreamerV3Trainer:
             "env.video_freq=10",
             f"metric.log_every={cfg.log_every}",
             f"checkpoint.every={cfg.checkpoint_every}",
-            # keep_last=5 deleted the GP run's peak brain (step ~107k) while
-            # returns were already declining — keep a deeper window
-            "checkpoint.keep_last=10",
+            f"checkpoint.keep_last={cfg.checkpoint_keep_last}",
+            f"checkpoint.milestone_every={cfg.checkpoint_milestone_every}",
+            f"checkpoint.keep_milestones={cfg.checkpoint_keep_milestones}",
+            f"checkpoint.retention_manifest={retention_manifest}",
+            f"checkpoint.retention_root={retention_root}",
         ]
 
         # Stable lineage-owned replay home (used when the buffer is created
         # fresh; a restored buffer keeps its own paths). New lineages never
         # write replay inside run dirs.
-        replay_dir = STATE_DIR / "games" / game_id / "lineages" / "main" / "replay"
+        replay_dir = lineage_dir / "replay"
 
         # Resume from checkpoint if not a fresh start
         resume_ckpt = None
@@ -431,6 +441,10 @@ class DreamerV3Trainer:
         print(f"[Trainer] Command: {' '.join(cmd)}")
 
         launch_ts = time.time()
+        known_run_dirs = {
+            path.resolve()
+            for path in _sheeprl_logs(game_id).glob("*/version_0")
+        }
         self._process = subprocess.Popen(
             cmd,
             cwd=str(SHEEPRL_DIR),
@@ -447,7 +461,13 @@ class DreamerV3Trainer:
         # Register the session in the catalog once the run dir materializes
         threading.Thread(
             target=self._catalog_register_session,
-            args=(game_id, launch_ts, algo.rsplit("_", 1)[1]),
+            args=(
+                game_id,
+                launch_ts,
+                algo.rsplit("_", 1)[1],
+                self._process,
+                known_run_dirs,
+            ),
             daemon=True,
         ).start()
 
@@ -472,25 +492,41 @@ class DreamerV3Trainer:
             return None
 
     def _catalog_register_session(
-        self, game_id: str, launch_ts: float, size_label: str = ""
+        self,
+        game_id: str,
+        launch_ts: float,
+        size_label: str = "",
+        process: Optional[subprocess.Popen] = None,
+        known_run_dirs: Optional[set[Path]] = None,
     ):
         """Wait for the child's run dir to appear, then record the session."""
         logs = _sheeprl_logs(game_id)
+        known_run_dirs = known_run_dirs or set()
         run_dir = None
         for _ in range(240):  # up to 2 min (model load can be slow)
             candidates = [
                 d for d in logs.glob("*/version_0")
-                if d.stat().st_mtime >= launch_ts - 2
+                if d.resolve() not in known_run_dirs
             ] if logs.exists() else []
             if candidates:
                 run_dir = max(candidates, key=lambda d: d.stat().st_mtime)
                 break
-            if self._process is None or self._process.poll() is not None:
+            if (
+                process is None
+                or self._process is not process
+                or process.poll() is not None
+            ):
                 return
             time.sleep(0.5)
         if run_dir is None:
             print("[Trainer] catalog: run dir never appeared; session unregistered")
             return
+        if self._process is not process or process.poll() is not None:
+            return
+        # Storage telemetry is launch-owned, not catalog-owned: database
+        # failure must not hide a live run, and a stale registrar must never
+        # attach its directory to a newer process.
+        self._active_run = (process, run_dir)
         self._update_tb_view(game_id, size_label, run_dir)
         try:
             con = _catalog.connect()
@@ -579,20 +615,21 @@ class DreamerV3Trainer:
             print(f"[Trainer] catalog snapshot registration failed: {exc}")
 
     def _catalog_session_end(self, status: str, reason: str):
-        if self._catalog_session_id is None:
+        session_id = self._catalog_session_id
+        self._catalog_session_id = None
+        self._session_run_dir = None
+        if session_id is None:
             return
         try:
             con = _catalog.connect()
             con.execute(
                 "UPDATE sessions SET status=?, exit_reason=?, ended_at=? WHERE id=?",
-                (status, reason, time.time(), self._catalog_session_id),
+                (status, reason, time.time(), session_id),
             )
             con.commit()
             con.close()
         except Exception as exc:
             print(f"[Trainer] catalog session end failed: {exc}")
-        self._catalog_session_id = None
-        self._session_run_dir = None
 
     def _monitor_process(self):
         """Monitor subprocess output and detect completion/errors."""
@@ -631,6 +668,9 @@ class DreamerV3Trainer:
             print(f"[SheepRL] {line}")
 
         exit_code = proc.wait()
+        active_run = self._active_run
+        if active_run is not None and active_run[0] is proc:
+            self._active_run = None
         if exit_code != 0 and self.state == TrainingState.TRAINING:
             self._error_message = (
                 f"SheepRL exited with code {exit_code}. Last output: {last_line}"
@@ -680,6 +720,21 @@ class DreamerV3Trainer:
         if versions:
             return versions[-1]
         return latest
+
+    @property
+    def active_run_dir(self) -> Optional[Path]:
+        """The registered live run only; never falls back to historical runs."""
+        process = self._process
+        active_run = self._active_run
+        if (
+            self.state != TrainingState.TRAINING
+            or process is None
+            or process.poll() is not None
+            or active_run is None
+            or active_run[0] is not process
+        ):
+            return None
+        return active_run[1]
 
     def list_videos(self) -> list[dict]:
         """Scan SheepRL's video directories for training videos.

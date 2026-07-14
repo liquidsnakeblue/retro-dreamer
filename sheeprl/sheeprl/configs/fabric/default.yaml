@@ -7,3 +7,7 @@ precision: "32-true"
 callbacks:
   - _target_: sheeprl.utils.callback.CheckpointCallback
     keep_last: "${checkpoint.keep_last}"
+    milestone_every: "${checkpoint.milestone_every}"
+    keep_milestones: "${checkpoint.keep_milestones}"
+    retention_manifest: "${checkpoint.retention_manifest}"
+    retention_root: "${checkpoint.retention_root}"

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import pathlib
 from typing import Any, Dict, Optional, Sequence, Union
 
 from lightning.fabric import Fabric
@@ -9,6 +7,7 @@ from lightning.fabric.plugins.collectives import TorchCollective
 from torch import Tensor
 
 from sheeprl.data.buffers import EnvIndependentReplayBuffer, EpisodeBuffer, ReplayBuffer
+from sheeprl.utils.checkpoint_policy import CheckpointRetentionPolicy
 
 
 class CheckpointCallback:
@@ -24,8 +23,26 @@ class CheckpointCallback:
     When the buffer is added to the state of the checkpoint, it is assumed that the episode is truncated.
     """
 
-    def __init__(self, keep_last: int | None = None) -> None:
+    def __init__(
+        self,
+        keep_last: int | None = None,
+        milestone_every: int | None = None,
+        keep_milestones: int | None = None,
+        retention_manifest: str | None = None,
+        retention_root: str | None = None,
+    ) -> None:
         self.keep_last = keep_last
+        self.milestone_every = milestone_every
+        self.keep_milestones = keep_milestones
+        self.retention_manifest = retention_manifest
+        self.retention_root = retention_root
+        self._retention = CheckpointRetentionPolicy(
+            keep_last=keep_last,
+            milestone_every=milestone_every,
+            keep_milestones=keep_milestones,
+            manifest_path=retention_manifest,
+            managed_root=retention_root,
+        )
 
     def on_checkpoint_coupled(
         self,
@@ -52,8 +69,8 @@ class CheckpointCallback:
         fabric.save(ckpt_path, state)
         if replay_buffer is not None:
             self._experiment_consistent_rb(replay_buffer, rb_state)
-        if fabric.is_global_zero and self.keep_last:
-            self._delete_old_checkpoints(pathlib.Path(ckpt_path).parent)
+        if fabric.is_global_zero:
+            self._retention.record_successful_write(ckpt_path)
 
     def on_checkpoint_player(
         self,
@@ -74,8 +91,8 @@ class CheckpointCallback:
         fabric.save(ckpt_path, state)
         if replay_buffer is not None:
             self._experiment_consistent_rb(replay_buffer, rb_state)
-        if fabric.is_global_zero and self.keep_last:
-            self._delete_old_checkpoints(pathlib.Path(ckpt_path).parent)
+        if fabric.is_global_zero:
+            self._retention.record_successful_write(ckpt_path)
 
     def on_checkpoint_trainer(
         self, fabric: Fabric, player_trainer_collective: TorchCollective, state: Dict[str, Any], ckpt_path: str
@@ -140,9 +157,3 @@ class CheckpointCallback:
         elif isinstance(rb, EpisodeBuffer):
             # reinsert the open episodes to continue the training
             rb._open_episodes = state
-
-    def _delete_old_checkpoints(self, ckpt_folder: pathlib.Path):
-        ckpts = list(sorted(ckpt_folder.glob("*.ckpt"), key=os.path.getmtime))
-        if len(ckpts) > self.keep_last:
-            to_delete = ckpts[: -self.keep_last]
-            [f.unlink() for f in to_delete]

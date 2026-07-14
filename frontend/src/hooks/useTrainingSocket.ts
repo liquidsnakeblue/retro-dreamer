@@ -16,6 +16,17 @@ export interface TrainingStatus {
   initial_state: string
 }
 
+export interface StorageUsage {
+  sampled_at: number
+  filesystem: {
+    total_bytes: number | null
+    free_bytes: number | null
+    free_percent: number | null
+  }
+  active_run_bytes: number | null
+  active_run_sampled_at: number | null
+}
+
 export interface VideoInfo {
   id: string
   source: 'train' | 'eval'
@@ -29,10 +40,12 @@ export interface VideoInfo {
 
 const API = '/api'
 const POLL_INTERVAL = 5000
+const STORAGE_POLL_INTERVAL = 30000
 
 export function useTrainingPolling() {
   const [status, setStatus] = useState<TrainingStatus | null>(null)
   const [videos, setVideos] = useState<VideoInfo[]>([])
+  const [storage, setStorage] = useState<StorageUsage | null>(null)
   const [connected, setConnected] = useState(false)
 
   const poll = useCallback(async () => {
@@ -56,11 +69,46 @@ export function useTrainingPolling() {
     } catch {}
   }, [])
 
+  const pollStorage = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const res = await fetch(`${API}/storage/usage`, { signal })
+      if (!res.ok) {
+        setStorage(null)
+        return
+      }
+      const data: StorageUsage = await res.json()
+      setStorage(current => (
+        current === null || data.sampled_at >= current.sampled_at ? data : current
+      ))
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        setStorage(null)
+      }
+    }
+  }, [])
+
   useEffect(() => {
     poll()
     const timer = setInterval(poll, POLL_INTERVAL)
     return () => clearInterval(timer)
   }, [poll])
 
-  return { connected, status, videos, refresh: poll }
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let controller: AbortController | undefined
+    const run = async () => {
+      controller = new AbortController()
+      await pollStorage(controller.signal)
+      if (!cancelled) timer = setTimeout(run, STORAGE_POLL_INTERVAL)
+    }
+    run()
+    return () => {
+      cancelled = true
+      controller?.abort()
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [pollStorage])
+
+  return { connected, status, storage, videos, refresh: poll }
 }

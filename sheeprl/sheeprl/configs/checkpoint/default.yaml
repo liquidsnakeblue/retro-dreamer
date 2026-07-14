@@ -2,3 +2,7 @@ every: 100
 resume_from: null
 save_last: True
 keep_last: 5
+milestone_every: 0
+keep_milestones: 0
+retention_manifest: null
+retention_root: null

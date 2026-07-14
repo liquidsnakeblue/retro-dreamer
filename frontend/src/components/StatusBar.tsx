@@ -1,7 +1,8 @@
-import type { TrainingStatus } from '../hooks/useTrainingSocket'
+import type { StorageUsage, TrainingStatus } from '../hooks/useTrainingSocket'
 
 interface StatusBarProps {
   status: TrainingStatus | null
+  storage: StorageUsage | null
 }
 
 function formatTime(seconds: number): string {
@@ -19,7 +20,12 @@ function formatNumber(n: number): string {
   return n.toFixed(0)
 }
 
-export function StatusBar({ status }: StatusBarProps) {
+function formatBytes(bytes: number | null): string {
+  if (bytes === null) return '—'
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
+}
+
+export function StatusBar({ status, storage }: StatusBarProps) {
   const state = status?.state || 'idle'
   const stateColors: Record<string, string> = {
     idle: 'text-retro-text-dim',
@@ -29,7 +35,7 @@ export function StatusBar({ status }: StatusBarProps) {
   }
 
   return (
-    <div className="bg-retro-card border-b border-retro-border px-6 py-2 flex items-center gap-6 text-xs shrink-0">
+    <div className="bg-retro-card border-b border-retro-border px-6 py-2 flex items-center gap-6 text-xs shrink-0 overflow-x-auto">
       <div className="flex items-center gap-2">
         <div className={`w-1.5 h-1.5 rounded-full ${
           state === 'training' ? 'bg-retro-success animate-pulse' :
@@ -45,6 +51,7 @@ export function StatusBar({ status }: StatusBarProps) {
       <Stat label="SPS" value={(status?.steps_per_second || 0).toFixed(1)} />
       <Stat label="Elapsed" value={formatTime(status?.elapsed_time || 0)} />
       <Stat label="GPU" value={`${(status?.gpu_memory_used || 0).toFixed(1)} GB`} />
+      <DiskGauge storage={storage} />
 
       <div className="w-px h-4 bg-retro-border" />
       <Stat label="Avg Return" value={(status?.avg_return || 0).toFixed(1)} highlight />
@@ -64,11 +71,59 @@ export function StatusBar({ status }: StatusBarProps) {
 
 function Stat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5 shrink-0">
       <span className="text-retro-text-dim">{label}</span>
       <span className={`font-semibold tabular-nums ${highlight ? 'text-retro-speed-glow' : 'text-retro-text'}`}>
         {value}
       </span>
+    </div>
+  )
+}
+
+function DiskGauge({ storage }: { storage: StorageUsage | null }) {
+  const rawPercent = storage?.filesystem.free_percent
+  const percent = typeof rawPercent === 'number'
+    ? Math.max(0, Math.min(100, rawPercent))
+    : null
+  if (percent === null) {
+    return (
+      <div className="flex items-center gap-1.5 shrink-0" aria-label="Disk usage unavailable">
+        <span className="text-retro-text-dim">Disk</span>
+        <div className="w-14 h-1.5 rounded-full bg-retro-border" />
+        <span className="font-semibold text-retro-text-dim">—</span>
+        <span className="text-retro-text-dim">Run —</span>
+      </div>
+    )
+  }
+  const color = percent <= 5
+    ? 'bg-retro-danger'
+    : percent <= 10
+      ? 'bg-retro-warning'
+      : 'bg-retro-success'
+  const textColor = percent <= 5
+    ? 'text-retro-danger'
+    : percent <= 10
+      ? 'text-retro-warning'
+      : 'text-retro-success'
+  const percentLabel = `${percent.toFixed(1)}% free`
+
+  return (
+    <div
+      className="flex items-center gap-1.5 shrink-0"
+      role="meter"
+      aria-label="Disk free space"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      aria-valuetext={`${percentLabel}; active run ${formatBytes(storage?.active_run_bytes ?? null)}`}
+      title="Active run size excludes the lineage replay buffer"
+    >
+      <span className="text-retro-text-dim">Disk</span>
+      <div className="w-14 h-1.5 rounded-full bg-retro-border overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${percent}%` }} />
+      </div>
+      <span className={`font-semibold tabular-nums ${textColor}`}>{percentLabel}</span>
+      <span className="text-retro-text-dim">Run {formatBytes(storage?.active_run_bytes ?? null)}</span>
     </div>
   )
 }

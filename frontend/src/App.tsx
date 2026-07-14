@@ -14,7 +14,7 @@ type ActiveTab = 'metrics' | 'live' | 'config' | 'copilot'
 export default function App() {
   const [selectedGame, setSelectedGame] = useState('FZero-Snes')
   const [activeTab, setActiveTab] = useState<ActiveTab>('copilot')
-  const { connected, status, videos, refresh } = useTrainingPolling()
+  const { connected, status, storage, videos, refresh } = useTrainingPolling()
 
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-retro-bg">
@@ -42,7 +42,7 @@ export default function App() {
       </header>
 
       {/* Status Bar */}
-      <StatusBar status={status} />
+      <StatusBar status={status} storage={storage} />
 
       {/* Main Content */}
       <main

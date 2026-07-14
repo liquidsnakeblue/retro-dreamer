@@ -47,13 +47,60 @@ class TrainingConfig:
     # path when the buffer's memmap files are lost or corrupt.
     resume_prefill: int = 0
 
-    # Cadence
-    checkpoint_every: int = 1000  # save every N steps
+    # Checkpoint cadence + bounded retention. At XL size a checkpoint is
+    # currently ~2.3 GiB, so the old 1k/keep-10 policy spent ~23 GiB per run
+    # and wrote a multi-gigabyte file about once a minute. Keep a short recent
+    # recovery window plus a bounded set of coarse rollback milestones.
+    checkpoint_every: int = 10_000
+    checkpoint_keep_last: int = 3
+    checkpoint_milestone_every: int = 50_000
+    checkpoint_keep_milestones: int = 5
     log_every: int = 100          # log metrics every N steps
 
     # Paths (dashboard-side: TensorBoard callback + episode renderer)
     logdir: str = "./logs"
     episode_dir: str = "./episodes"
+
+    def validate(self) -> "TrainingConfig":
+        """Reject unsafe checkpoint policies before a training child starts."""
+        integer_fields = (
+            "checkpoint_every",
+            "checkpoint_keep_last",
+            "checkpoint_milestone_every",
+            "checkpoint_keep_milestones",
+        )
+        for name in integer_fields:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{name} must be an integer, got {value!r}")
+
+        if not 1 <= self.checkpoint_every <= 10_000_000:
+            raise ValueError("checkpoint_every must be between 1 and 10,000,000")
+        if not 1 <= self.checkpoint_keep_last <= 1_000:
+            raise ValueError("checkpoint_keep_last must be between 1 and 1,000")
+        if not 0 <= self.checkpoint_milestone_every <= 100_000_000:
+            raise ValueError(
+                "checkpoint_milestone_every must be between 0 and 100,000,000"
+            )
+        if not 0 <= self.checkpoint_keep_milestones <= 1_000:
+            raise ValueError(
+                "checkpoint_keep_milestones must be between 0 and 1,000"
+            )
+        if (self.checkpoint_milestone_every == 0) != (
+            self.checkpoint_keep_milestones == 0
+        ):
+            raise ValueError(
+                "checkpoint_milestone_every and checkpoint_keep_milestones "
+                "must both be zero to disable milestones"
+            )
+        if (
+            self.checkpoint_milestone_every
+            and self.checkpoint_milestone_every < self.checkpoint_every
+        ):
+            raise ValueError(
+                "checkpoint_milestone_every must be at least checkpoint_every"
+            )
+        return self
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -69,7 +116,7 @@ class TrainingConfig:
             data = yaml.safe_load(f) or {}
         # Tolerate files saved by the old fat config: ignore removed keys
         known = set(cls.__dataclass_fields__)
-        return cls(**{k: v for k, v in data.items() if k in known})
+        return cls(**{k: v for k, v in data.items() if k in known}).validate()
 
     @classmethod
     def from_preset(cls, size: str = "small") -> "TrainingConfig":
@@ -85,4 +132,4 @@ class TrainingConfig:
             "xl": dict(num_envs=4),       # SheepRL XL, ~200M — the paper's game config
         }
         preset = presets.get(size, presets["small"])
-        return cls(model_size=size, **preset)
+        return cls(model_size=size, **preset).validate()

@@ -2,9 +2,11 @@
 
 from fastapi import APIRouter, Cookie, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictInt
 from pathlib import Path
 from typing import Optional
+
+from backend.storage import StorageUsageSampler
 
 router = APIRouter(prefix="/api")
 
@@ -19,6 +21,10 @@ class TrainingStartRequest(BaseModel):
     game_id: Optional[str] = None
     initial_state: Optional[str] = None
     resume_prefill: Optional[int] = None
+    checkpoint_every: Optional[StrictInt] = None
+    checkpoint_keep_last: Optional[StrictInt] = None
+    checkpoint_milestone_every: Optional[StrictInt] = None
+    checkpoint_keep_milestones: Optional[StrictInt] = None
 
 
 class TrainingPlanRequest(BaseModel):
@@ -46,6 +52,9 @@ _trainer = None
 _game_manager = None
 _studio_state_builder = None
 _training_planner = None
+_storage_sampler = StorageUsageSampler(
+    Path(__file__).resolve().parents[2] / "sheeprl"
+)
 
 
 def set_dependencies(trainer, game_manager):
@@ -125,6 +134,21 @@ async def start_training(req: TrainingStartRequest):
         config.num_envs = req.num_envs
     if req.resume_prefill is not None:
         config.resume_prefill = req.resume_prefill
+
+    for name in (
+        "checkpoint_every",
+        "checkpoint_keep_last",
+        "checkpoint_milestone_every",
+        "checkpoint_keep_milestones",
+    ):
+        value = getattr(req, name)
+        if value is not None:
+            setattr(config, name, value)
+
+    try:
+        config.validate()
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
     _trainer.start(config, fresh_start=req.fresh_start)
 
@@ -373,6 +397,14 @@ async def training_status():
         "gpu_memory_total": status.gpu_memory_total,
         "error_message": status.error_message,
     }
+
+
+@router.get("/storage/usage")
+def storage_usage():
+    """Filesystem headroom plus cached size of the registered active run."""
+    if _trainer is None:
+        raise HTTPException(500, "Trainer not initialized")
+    return _storage_sampler.sample(_trainer.active_run_dir)
 
 
 @router.get("/config")
