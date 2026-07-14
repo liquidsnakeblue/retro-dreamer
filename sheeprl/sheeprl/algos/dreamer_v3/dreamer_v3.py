@@ -637,7 +637,7 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                             aggregator.update("Rewards/rew_avg", ep_rew)
                             aggregator.update("Game/ep_len_avg", ep_len)
                         _tr = f" track={_tracks[i]}" if _tracks is not None else ""
-                        fabric.print(f"Rank-0: policy_step={policy_step}, reward_env_{i}={ep_rew}{_tr}")
+                        fabric.print(f"Rank-0: policy_step={policy_step}, reward_env_{i}={ep_rew}, length_env_{i}={ep_len}{_tr}")
                 else:
                     # gymnasium 0.29: object array of per-env info dicts
                     for i, agent_ep_info in enumerate(final_info):
@@ -647,7 +647,7 @@ def main(fabric: Fabric, cfg: Dict[str, Any]):
                             if aggregator and not aggregator.disabled:
                                 aggregator.update("Rewards/rew_avg", ep_rew)
                                 aggregator.update("Game/ep_len_avg", ep_len)
-                            fabric.print(f"Rank-0: policy_step={policy_step}, reward_env_{i}={ep_rew[-1]}")
+                            fabric.print(f"Rank-0: policy_step={policy_step}, reward_env_{i}={ep_rew[-1]}, length_env_{i}={ep_len[-1]}")
 
             # Save the real next observation
             # gymnasium >= 1.0 (SAME_STEP autoreset) uses "final_obs"; 0.29 used "final_observation"

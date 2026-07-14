@@ -9,6 +9,7 @@ Our dashboard observes and controls the process.
 
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -811,6 +812,7 @@ class _MetricsTracker:
         self.max_return = 0.0
         self._start_time = time.time()
         self._all_returns: list[float] = []
+        self._all_lengths: list[float] = []
 
     def parse_log_line(self, line: str):
         """Extract metrics from SheepRL's console output."""
@@ -828,16 +830,26 @@ class _MetricsTracker:
 
             if "reward_env_" in line:
                 try:
-                    # "reward_env_0=56.7" optionally followed by " track=go"
-                    reward_str = line.split("reward_env_")[1].split("=")[1].strip()
-                    reward_str = reward_str.split()[0].strip("[]")
-                    reward = float(reward_str)
-                    self.current_episode += 1
-                    self._all_returns.append(reward)
-                    if reward > self.max_return:
-                        self.max_return = reward
-                    recent = self._all_returns[-100:]
-                    self.avg_return = sum(recent) / len(recent)
+                    # SheepRL prints (dreamer_v3.py): "reward_env_0=56.7,
+                    # length_env_0=1234" (+ optional " track=go"). Parse both
+                    # with regex so the length_env_ suffix can't corrupt the
+                    # reward value (the old split-on-'=' broke once length was
+                    # added, because it introduced a second '=' on the line).
+                    rm = re.search(r"reward_env_\d+=(-?[0-9eE.]+)", line)
+                    lm = re.search(r"length_env_\d+=(-?[0-9eE.]+)", line)
+                    if rm:
+                        reward = float(rm.group(1))
+                        self.current_episode += 1
+                        self._all_returns.append(reward)
+                        if reward > self.max_return:
+                            self.max_return = reward
+                        recent = self._all_returns[-100:]
+                        self.avg_return = sum(recent) / len(recent)
+                    if lm:
+                        length = float(lm.group(1))
+                        self._all_lengths.append(length)
+                        recent_len = self._all_lengths[-100:]
+                        self.avg_length = sum(recent_len) / len(recent_len)
                 except (ValueError, IndexError):
                     pass
 
