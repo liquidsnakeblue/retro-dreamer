@@ -669,6 +669,12 @@ class DreamerV3Trainer:
         self._active_run = (process, run_dir)
         self._update_tb_view(game_id, size_label, run_dir)
         try:
+            # Lazy import: backend.server imports this module at load time.
+            from backend import server as _server
+            _server.repoint_tensorboard(str(run_dir))
+        except Exception as exc:
+            print(f"[Trainer] tb repoint failed: {exc}")
+        try:
             con = _catalog.connect()
             con.execute(
                 "INSERT OR IGNORE INTO games (id, display_name) VALUES (?,?)",
@@ -984,8 +990,20 @@ class DreamerV3Trainer:
         return checkpoints
 
     def get_tensorboard_logdir(self) -> str:
-        """Return the directory TensorBoard should point at for the active game."""
-        return str(_sheeprl_logs(self.config.game_id))
+        """Return the directory TensorBoard should point at for the active game.
+
+        Only the newest run's version_0 — Schuyler wants just the latest run
+        in the Metrics tab, not every historical run dir. Older runs stay on
+        disk; the trainer repoints TB when a start/resume creates a new one.
+        """
+        logs = _sheeprl_logs(self.config.game_id)
+        if logs.exists():
+            candidates = sorted(
+                logs.glob("*/version_0"), key=lambda p: p.stat().st_mtime
+            )
+            if candidates:
+                return str(candidates[-1])
+        return str(logs)
 
     # ------------------------------------------------------------------
     # Compatibility stubs

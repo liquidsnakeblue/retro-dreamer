@@ -53,15 +53,17 @@ trainer: DreamerV3Trainer | None = None
 game_manager: GameManager | None = None
 ws_manager = ConnectionManager()
 tb_process: subprocess.Popen | None = None
+tb_logdir: str | None = None
 studio_state_builder: StudioStateBuilder | None = None
 training_planner: TrainingPlanner | None = None
 
 
 def start_tensorboard(logdir: str, port: int = 6006):
     """Start TensorBoard as a subprocess."""
-    global tb_process
+    global tb_process, tb_logdir
     logdir_path = Path(logdir)
     logdir_path.mkdir(parents=True, exist_ok=True)
+    tb_logdir = str(logdir_path)
 
     try:
         import shutil
@@ -92,8 +94,28 @@ def stop_tensorboard():
             tb_process.terminate()
             tb_process.wait(timeout=5)
         except Exception:
-            pass
+            # A TB that survives terminate() keeps :6006 bound and the next
+            # start dies silently (output is DEVNULLed) — kill, don't hope.
+            try:
+                tb_process.kill()
+                tb_process.wait(timeout=5)
+            except Exception:
+                pass
         tb_process = None
+
+
+def repoint_tensorboard(logdir: str):
+    """Restart TensorBoard on a new logdir (no-op if already pointed there).
+
+    Called by the trainer whenever a training start/resume creates a new run
+    dir, so the Metrics tab only ever shows the newest run instead of every
+    historical run in the game's log directory.
+    """
+    if tb_logdir == str(Path(logdir)):
+        return
+    print(f"[Server] TensorBoard repoint -> {logdir}")
+    stop_tensorboard()
+    start_tensorboard(logdir)
 
 
 @asynccontextmanager

@@ -106,6 +106,12 @@ class GameManager:
 
     def _get_retro(self):
         if self._retro is None:
+            # pyglet opens a GL shadow window at import time, which dies
+            # without DISPLAY (the studio runs under systemd, headless) and
+            # silently empties the built-in game list. Same guard as
+            # sheeprl/_retro_run.py.
+            import pyglet
+            pyglet.options["shadow_window"] = False
             import retro
             self._retro = retro
         return self._retro
