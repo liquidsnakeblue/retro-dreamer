@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useTrainingPolling } from './hooks/useTrainingSocket'
 import { StatusBar } from './components/StatusBar'
 import { EpisodePlayer } from './components/EpisodePlayer'
@@ -9,7 +9,7 @@ import { GameConfigEditor } from './components/GameConfigEditor'
 import { LivePlay } from './components/LivePlay'
 import { CopilotPanel } from './components/CopilotPanel'
 
-type ActiveTab = 'metrics' | 'live' | 'config' | 'copilot'
+type ActiveTab = 'metrics' | 'live' | 'config' | 'copilot' | 'integration'
 
 export default function App() {
   const [selectedGame, setSelectedGame] = useState('FZero-Snes')
@@ -80,6 +80,11 @@ export default function App() {
               active={activeTab === 'config'}
               onClick={() => setActiveTab('config')}
             />
+            <TabButton
+              label="Integration"
+              active={activeTab === 'integration'}
+              onClick={() => setActiveTab('integration')}
+            />
           </div>
 
           {/* Tab content */}
@@ -125,6 +130,10 @@ export default function App() {
               </div>
             )}
 
+            {/* Keep the iframe mounted once visited so the VNC session (and
+                any in-progress RAM search) survives tab switches. */}
+            <IntegrationTab visible={activeTab === 'integration'} />
+
             {/* Keep the resident copilot mounted while other tabs are open so
                 event polling and pending approval cards retain their lifecycle. */}
             <div
@@ -141,6 +150,27 @@ export default function App() {
           </div>
         </div>
       </main>
+    </div>
+  )
+}
+
+/** stable-retro's gym-retro-integration tool (RAM search, save states,
+ * scenario/reward JSON authoring) streamed from Xvfb via noVNC. Mounts on
+ * first visit, then stays alive hidden so the session isn't lost. */
+function IntegrationTab({ visible }: { visible: boolean }) {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => {
+    if (visible) setMounted(true)
+  }, [visible])
+  return (
+    <div className={visible ? 'h-full bg-black' : 'hidden'}>
+      {mounted && (
+        <iframe
+          src="/integration/vnc.html?autoconnect=true&resize=scale&path=integration/websockify&reconnect=true"
+          className="w-full h-full border-0"
+          title="Integration UI"
+        />
+      )}
     </div>
   )
 }

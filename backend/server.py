@@ -232,6 +232,10 @@ async def websocket_metrics(websocket: WebSocket):
 # registered before the SPA catch-all below.
 LIVE_ORIGIN = "http://127.0.0.1:8092"
 TB_ORIGIN = "http://127.0.0.1:6006"
+# Integration UI (gym-retro-integration via Xvfb + noVNC; see
+# scripts/integration_ui.sh, unit retro-integration-ui.service)
+INTEGRATION_ORIGIN = "http://127.0.0.1:6080"
+INTEGRATION_WS = "ws://127.0.0.1:6080/websockify"
 
 _HOP_HEADERS = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -284,6 +288,62 @@ async def proxy_live(request: Request, path: str):
 async def proxy_tensorboard(request: Request, path: str):
     """Same-origin proxy to TensorBoard (spawned with --path_prefix=/tensorboard)."""
     return await _proxy(request, f"{TB_ORIGIN}/tensorboard{path}")
+
+
+@app.websocket("/integration/websockify")
+async def integration_websockify(client_ws: WebSocket):
+    """Bidirectional bridge to websockify's VNC websocket (noVNC data channel)."""
+    import websockets as _wslib
+
+    requested = client_ws.headers.get("sec-websocket-protocol", "")
+    subprotocol = "binary" if "binary" in requested else None
+    try:
+        upstream = await _wslib.connect(
+            INTEGRATION_WS, subprotocols=["binary"], max_size=None
+        )
+    except Exception:
+        # Accept-then-close so the browser sees a clean 1011, not a 500
+        await client_ws.accept()
+        await client_ws.close(code=1011, reason="integration UI not running")
+        return
+    await client_ws.accept(subprotocol=subprotocol)
+
+    async def client_to_upstream():
+        try:
+            while True:
+                msg = await client_ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    break
+                data = msg.get("bytes")
+                if data is None and msg.get("text") is not None:
+                    data = msg["text"].encode()
+                if data:
+                    await upstream.send(data)
+        finally:
+            await upstream.close()
+
+    async def upstream_to_client():
+        try:
+            async for data in upstream:
+                if isinstance(data, str):
+                    await client_ws.send_text(data)
+                else:
+                    await client_ws.send_bytes(data)
+        finally:
+            try:
+                await client_ws.close()
+            except Exception:
+                pass
+
+    await asyncio.gather(
+        client_to_upstream(), upstream_to_client(), return_exceptions=True
+    )
+
+
+@app.api_route("/integration/{path:path}", methods=["GET", "HEAD"])
+async def proxy_integration(request: Request, path: str):
+    """Same-origin proxy to the noVNC web server (Integration tab)."""
+    return await _proxy(request, f"{INTEGRATION_ORIGIN}/{path}")
 
 
 # Serve frontend (built React app)
