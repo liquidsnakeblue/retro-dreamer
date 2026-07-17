@@ -1,0 +1,66 @@
+{
+  "actions": [
+    {
+      "name": "NoOp",
+      "buttons": []
+    },
+    {
+      "name": "Up",
+      "buttons": [
+        "UP"
+      ]
+    },
+    {
+      "name": "Down",
+      "buttons": [
+        "DOWN"
+      ]
+    },
+    {
+      "name": "Left",
+      "buttons": [
+        "LEFT"
+      ]
+    },
+    {
+      "name": "Right",
+      "buttons": [
+        "RIGHT"
+      ]
+    },
+    {
+      "name": "Up-Fire",
+      "buttons": [
+        "UP",
+        "B"
+      ]
+    },
+    {
+      "name": "Down-Fire",
+      "buttons": [
+        "DOWN",
+        "B"
+      ]
+    },
+    {
+      "name": "Left-Fire",
+      "buttons": [
+        "LEFT",
+        "B"
+      ]
+    },
+    {
+      "name": "Right-Fire",
+      "buttons": [
+        "RIGHT",
+        "B"
+      ]
+    },
+    {
+      "name": "Fire",
+      "buttons": [
+        "B"
+      ]
+    }
+  ]
+}

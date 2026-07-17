@@ -1,0 +1,18 @@
+{
+  "display_name": "1943 (Nes)",
+  "game_id": "1943-Nes-v0",
+  "system": "Nes",
+  "default_state": "Level1",
+  "button_layout": [
+    "B",
+    "",
+    "Select",
+    "Start",
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "A"
+  ],
+  "promoted_from": "/home/liquidsnakeblue/fzero-dreamer/venv/lib/python3.12/site-packages/stable_retro/data/stable/1943-Nes-v0"
+}

@@ -1,0 +1,19 @@
+{
+  "reward": {
+    "warmup_steps": 10,
+    "variables": {
+      "score": {
+        "reward": 0.01,
+        "delta": "positive"
+      }
+    }
+  },
+  "done": {
+    "variables": {
+      "lives": {
+        "op": "equal",
+        "reference": 0
+      }
+    }
+  }
+}
