@@ -9,8 +9,7 @@
         "max_delta": 300
       },
       "health": {
-        "penalty": 1.0,
-        "heal_reward": 0.25
+        "penalty": 1.0
       },
       "speed": {
         "mode": "quadratic",
@@ -26,7 +25,11 @@
     "variables": {
       "health": {
         "op": "less-than",
-        "reference": 100
+        "reference": 2048
+      },
+      "reverse": {
+        "op": "equal",
+        "reference": 1
       },
       "race_on": {
         "op": "equal",

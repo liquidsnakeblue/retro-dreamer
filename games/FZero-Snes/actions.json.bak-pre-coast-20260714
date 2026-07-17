@@ -35,22 +35,6 @@
         "RIGHT",
         "R"
       ]
-    },
-    {
-      "name": "Coast",
-      "buttons": []
-    },
-    {
-      "name": "Steer-Left",
-      "buttons": [
-        "LEFT"
-      ]
-    },
-    {
-      "name": "Steer-Right",
-      "buttons": [
-        "RIGHT"
-      ]
     }
   ]
 }

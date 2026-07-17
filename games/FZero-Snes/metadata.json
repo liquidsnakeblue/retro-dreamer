@@ -2,7 +2,7 @@
   "display_name": "F-Zero (SNES)",
   "game_id": "FZero-Snes",
   "system": "Snes",
-  "default_state": "go",
+  "default_state": "BBP1",
   "button_layout": [
     "B",
     "Y",
