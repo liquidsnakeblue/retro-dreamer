@@ -24,6 +24,12 @@ from typing import Optional
 import torch
 import yaml
 
+
+def _nvidia_smi() -> str:
+    """nvidia-smi path that works under systemd-run units (minimal PATH
+    misses /usr/lib/wsl/lib on WSL)."""
+    return shutil.which("nvidia-smi") or "/usr/lib/wsl/lib/nvidia-smi"
+
 from .config import TrainingConfig
 from .callbacks import TensorBoardCallback, WebSocketBroadcaster, EpisodeRenderer
 from backend.action_manifest import (
@@ -185,13 +191,17 @@ class DreamerV3Trainer:
 
     @property
     def status(self) -> TrainingStatus:
-        gpu_mem_used, gpu_mem_total = 0.0, 0.0
-        try:
-            if torch.cuda.is_available():
-                gpu_mem_used = torch.cuda.memory_allocated() / 1e9
-                gpu_mem_total = torch.cuda.get_device_properties(0).total_memory / 1e9
-        except Exception:
-            pass
+        gpu_mem_used, gpu_mem_total = self._gpu_memory_device_wide()
+        if gpu_mem_total == 0.0:
+            # Fallback: this process's allocator view (usually ~0 — the
+            # TRAINING CHILD owns the GPU, so device-wide nvidia-smi above
+            # is the meaningful reading).
+            try:
+                if torch.cuda.is_available():
+                    gpu_mem_used = torch.cuda.memory_allocated() / 1e9
+                    gpu_mem_total = torch.cuda.get_device_properties(0).total_memory / 1e9
+            except Exception:
+                pass
 
         elapsed = time.time() - self._start_time if self._start_time > 0 else 0
         return TrainingStatus(
@@ -208,6 +218,31 @@ class DreamerV3Trainer:
             error_message=self._error_message,
             game_id=self.config.game_id,
         )
+
+    _gpu_cache: tuple = (0.0, 0.0, 0.0)  # (ts, used_gb, total_gb)
+
+    @classmethod
+    def _gpu_memory_device_wide(cls) -> tuple:
+        """Device-wide GPU memory via nvidia-smi (5s cache). The server
+        process allocates nothing itself, so torch's per-process counters
+        read ~0 while the training child holds 20+GB — nvidia-smi is the
+        only truthful reading. Resolved by absolute path because systemd-run
+        units miss /usr/lib/wsl/lib on PATH (the launch-time VRAM guard was
+        silently skipped for the same reason)."""
+        ts, used, total = cls._gpu_cache
+        if time.time() - ts < 5.0:
+            return used, total
+        try:
+            out = subprocess.check_output(
+                [_nvidia_smi(), "--query-gpu=memory.used,memory.total",
+                 "--format=csv,noheader,nounits"], timeout=5,
+            ).decode().split("\n")[0]
+            used_mib, total_mib = map(int, out.split(","))
+            used, total = used_mib / 1024, total_mib / 1024
+        except Exception:
+            used, total = 0.0, 0.0
+        cls._gpu_cache = (time.time(), used, total)
+        return used, total
 
     @staticmethod
     def _workspace_action_manifest(game_id: str, game_dir: Path) -> dict:
@@ -550,7 +585,7 @@ class DreamerV3Trainer:
         # clean CUDA OOM in the trainer log instead.
         try:
             free_mib, total_mib = map(int, subprocess.check_output(
-                ["nvidia-smi", "--query-gpu=memory.free,memory.total",
+                [_nvidia_smi(), "--query-gpu=memory.free,memory.total",
                  "--format=csv,noheader,nounits"], timeout=10
             ).decode().split("\n")[0].split(","))
             fraction = max(0.1, round((free_mib - 1536) / total_mib, 3))
