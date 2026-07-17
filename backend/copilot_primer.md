@@ -334,15 +334,23 @@ served two ways; use these, don't parse raw *.tfevents by hand.
 - GET /api/training/logs — tail of the live SheepRL stdout/stderr.
 - GET /api/tensorboard/logdir — the on-disk logdir, if you need file paths.
 
-- The TensorBoard HTTP API on http://localhost:6006 is THE source for a
-  finished run's full scalar history. Pure curl, no deps:
-  - list runs:  curl -s http://localhost:6006/data/runs
-    -> ["LittleMermaid-Nes-v0/XL_2026-07-12_11-16-01", ...] (Game/SIZE_stamp)
-  - list tags:  curl -s http://localhost:6006/data/plugin/scalars/tags
-    -> which scalars each run logged.
-  - pull one:   curl -s "http://localhost:6006/data/plugin/scalars/scalars?tag=<TAG>&run=<RUN>"
-    -> [[wall_time, step, value], ...]. URL-encode the "/" in tag/run as %2F
-       (e.g. tag=Game%2Fep_len_avg, run=LittleMermaid-Nes-v0%2FXL_2026-...).
+- The TensorBoard HTTP API is THE source for scalar history. It lives behind
+  the studio's same-origin proxy at http://localhost:8091/tensorboard/ (TB
+  itself runs path-prefixed; the bare http://localhost:6006/data/... URLs
+  404 — that is NOT "TensorBoard is down"). TB is pointed at ONLY the newest
+  run's logdir and is re-pointed automatically on every training start/resume,
+  so it always shows the run currently (or most recently) training. Pure curl,
+  no deps:
+  Always pass --compressed to curl here (the proxy may return gzip).
+  - list runs:  curl -s --compressed http://localhost:8091/tensorboard/data/runs
+    -> ["."]  (single unnamed run = the newest one; that "." is the run key)
+  - list tags:  curl -s --compressed http://localhost:8091/tensorboard/data/plugin/scalars/tags
+    -> which scalars it logged (keyed under ".").
+  - pull one:   curl -s --compressed "http://localhost:8091/tensorboard/data/plugin/scalars/scalars?tag=<TAG>&run=."
+    -> [[wall_time, step, value], ...]. URL-encode the "/" in tag as %2F
+       (e.g. tag=Game%2Fep_len_avg). The run param is literally "run=." now.
+  - Older runs are NOT in TB anymore; their tfevents stay on disk
+    (GET /api/tensorboard/logdir shows the current dir; siblings hold history).
 - The tags that answer "did it learn / did it get stuck":
   - Rewards/rew_avg — climbing = learning; flat/low across the whole run =
     stuck, the agent never found the reward.

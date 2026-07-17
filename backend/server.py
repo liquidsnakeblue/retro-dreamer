@@ -259,6 +259,11 @@ async def _proxy(request: Request, target: str) -> Response:
     if request.url.query:
         target = f"{target}?{request.url.query}"
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_HEADERS}
+    # If the client didn't ask for compression, don't let httpx negotiate it
+    # upstream on its own: TB would gzip and we'd forward compressed bytes to
+    # a client that never sent Accept-Encoding (breaks plain `curl | json`).
+    # Browsers send their own Accept-Encoding and are unaffected.
+    headers.setdefault("accept-encoding", "identity")
     upstream = client.build_request(
         request.method, target, headers=headers, content=await request.body()
     )
