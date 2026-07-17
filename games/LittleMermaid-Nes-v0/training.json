@@ -1,0 +1,50 @@
+{
+  "reward": {
+    "variables": {
+      "score": {
+        "reward": 0.05,
+        "delta": "signed",
+        "max_delta": 1000
+      },
+      "playerX": {
+        "reward": 0.1,
+        "delta": "signed",
+        "wrap": 256,
+        "max_delta": 16
+      },
+      "health": {
+        "penalty": 5,
+        "heal_reward": 2
+      },
+      "lives": {
+        "penalty": 50
+      },
+      "green_pearls_found": {
+        "reward": 1.0,
+        "delta": "signed"
+      },
+      "red_pearls_found": {
+        "reward": 1.0,
+        "delta": "signed"
+      },
+      "stage": {
+        "reward": 100,
+        "delta": "signed",
+        "max_delta": 1
+      },
+      "scrollY": {
+        "reward": 0.05,
+        "delta": "signed",
+        "max_delta": 16
+      }
+    }
+  },
+  "done": {
+    "variables": {
+      "lives": {
+        "op": "equal",
+        "reference": 0
+      }
+    }
+  }
+}

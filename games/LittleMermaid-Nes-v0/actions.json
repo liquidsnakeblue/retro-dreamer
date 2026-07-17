@@ -1,0 +1,59 @@
+{
+  "actions": [
+    {
+      "name": "NoOp",
+      "buttons": []
+    },
+    {
+      "name": "Up",
+      "buttons": [
+        "UP"
+      ]
+    },
+    {
+      "name": "Down",
+      "buttons": [
+        "DOWN"
+      ]
+    },
+    {
+      "name": "Left",
+      "buttons": [
+        "LEFT"
+      ]
+    },
+    {
+      "name": "Right",
+      "buttons": [
+        "RIGHT"
+      ]
+    },
+    {
+      "name": "Up-Right",
+      "buttons": [
+        "UP",
+        "RIGHT"
+      ]
+    },
+    {
+      "name": "Down-Right",
+      "buttons": [
+        "DOWN",
+        "RIGHT"
+      ]
+    },
+    {
+      "name": "Bubble",
+      "buttons": [
+        "A"
+      ]
+    },
+    {
+      "name": "Bubble-Right",
+      "buttons": [
+        "RIGHT",
+        "A"
+      ]
+    }
+  ]
+}

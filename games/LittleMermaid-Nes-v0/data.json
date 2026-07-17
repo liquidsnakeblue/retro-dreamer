@@ -1,0 +1,52 @@
+{
+  "info": {
+    "forks_found": {
+      "address": 178,
+      "type": "|u1"
+    },
+    "green_pearls_found": {
+      "address": 181,
+      "type": "|u1"
+    },
+    "health": {
+      "address": 177,
+      "type": "|u1"
+    },
+    "lives": {
+      "address": 176,
+      "type": "|i1"
+    },
+    "red_pearls_found": {
+      "address": 180,
+      "type": "|u1"
+    },
+    "score": {
+      "address": 1279,
+      "type": ">n8"
+    },
+    "playerX": {
+      "address": 816,
+      "type": "|u1"
+    },
+    "playerPage": {
+      "address": 832,
+      "type": "|u1"
+    },
+    "playerY": {
+      "address": 864,
+      "type": "|u1"
+    },
+    "roomPos": {
+      "address": 82,
+      "type": "|u1"
+    },
+    "stage": {
+      "address": 233,
+      "type": "|u1"
+    },
+    "scrollY": {
+      "address": 250,
+      "type": "<u2"
+    }
+  }
+}
