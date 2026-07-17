@@ -1,8 +1,11 @@
 import { useRef, useState, useEffect } from 'react'
 import Hls from 'hls.js'
 
-const LIVE_BASE = `http://${window.location.hostname}:8092`
-const API = `http://${window.location.hostname}:8091/api`
+// Same-origin paths — the backend reverse-proxies /live/* to the sidecar
+// (:8092), so the dashboard works identically on localhost, LAN, and through
+// the Cloudflare tunnel (retro.schuyler.ai).
+const LIVE_BASE = '/live'
+const API = '/api'
 
 // Track list comes from games/<id>/metadata.json (annotated_states) — no
 // game-specific data lives in the frontend. Race states listed first.

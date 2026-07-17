@@ -13,11 +13,13 @@ import subprocess
 from pathlib import Path
 from contextlib import asynccontextmanager
 
+import httpx
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTask
 
 # Add project root to path so "backend.*" imports work when running directly
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -71,6 +73,9 @@ def start_tensorboard(logdir: str, port: int = 6006):
                 "--port", str(port),
                 "--host", "0.0.0.0",
                 "--reload_interval", "10",
+                # Served through this app's /tensorboard/ reverse proxy so the
+                # dashboard works on a single hostname (Cloudflare tunnel).
+                "--path_prefix", "/tensorboard",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -129,7 +134,7 @@ async def lifespan(app: FastAPI):
 
     print("[Server] Retro Dreamer ready")
     print("[Server] Dashboard: http://localhost:8080")
-    print("[Server] TensorBoard: http://localhost:6006")
+    print("[Server] TensorBoard: http://localhost:6006/tensorboard/ (proxied at /tensorboard/)")
     print("[Server] API docs: http://localhost:8080/docs")
 
     yield
@@ -138,6 +143,8 @@ async def lifespan(app: FastAPI):
     if trainer and trainer.state.value in ("training", "paused"):
         trainer.stop()
     stop_tensorboard()
+    if _proxy_client is not None:
+        await _proxy_client.aclose()
 
 
 class _TrainerWSBridge:
@@ -194,6 +201,67 @@ async def websocket_metrics(websocket: WebSocket):
         ws_manager.disconnect(websocket)
     except Exception:
         ws_manager.disconnect(websocket)
+
+
+# ---- Reverse proxies: live-play sidecar + TensorBoard ----
+# Remote access (retro.schuyler.ai via Cloudflare tunnel) exposes only this
+# port, so the browser can't reach :8092/:6006 directly. Everything the
+# frontend needs is funneled same-origin through these routes; they must be
+# registered before the SPA catch-all below.
+LIVE_ORIGIN = "http://127.0.0.1:8092"
+TB_ORIGIN = "http://127.0.0.1:6006"
+
+_HOP_HEADERS = {
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
+}
+_proxy_client: httpx.AsyncClient | None = None
+
+
+def _get_proxy_client() -> httpx.AsyncClient:
+    global _proxy_client
+    if _proxy_client is None:
+        # read=None: HLS/MP4 streams stay open indefinitely
+        _proxy_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=None, write=30.0, pool=None)
+        )
+    return _proxy_client
+
+
+async def _proxy(request: Request, target: str) -> Response:
+    client = _get_proxy_client()
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_HEADERS}
+    upstream = client.build_request(
+        request.method, target, headers=headers, content=await request.body()
+    )
+    try:
+        resp = await client.send(upstream, stream=True)
+    except httpx.ConnectError:
+        return Response(status_code=502, content=b"upstream not running")
+    resp_headers = {
+        k: v for k, v in resp.headers.items()
+        if k.lower() not in ("connection", "keep-alive", "transfer-encoding")
+    }
+    return StreamingResponse(
+        resp.aiter_raw(),
+        status_code=resp.status_code,
+        headers=resp_headers,
+        background=BackgroundTask(resp.aclose),
+    )
+
+
+@app.api_route("/live/{path:path}", methods=["GET", "HEAD"])
+async def proxy_live(request: Request, path: str):
+    """Same-origin proxy to the live-play sidecar (backend/live_server.py)."""
+    return await _proxy(request, f"{LIVE_ORIGIN}/{path}")
+
+
+@app.api_route("/tensorboard{path:path}", methods=["GET", "HEAD", "POST"])
+async def proxy_tensorboard(request: Request, path: str):
+    """Same-origin proxy to TensorBoard (spawned with --path_prefix=/tensorboard)."""
+    return await _proxy(request, f"{TB_ORIGIN}/tensorboard{path}")
 
 
 # Serve frontend (built React app)

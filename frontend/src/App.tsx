@@ -91,7 +91,7 @@ export default function App() {
                   <div className="px-4 py-3 border-b border-retro-border flex items-center justify-between shrink-0">
                     <h2 className="text-sm font-semibold text-retro-text">Training Metrics</h2>
                     <a
-                      href="http://localhost:6006"
+                      href="/tensorboard/"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-[10px] text-retro-accent hover:text-retro-accent-bright"
@@ -100,7 +100,7 @@ export default function App() {
                     </a>
                   </div>
                   <iframe
-                    src="http://localhost:6006"
+                    src="/tensorboard/"
                     className="w-full border-0"
                     style={{ height: 'calc(100% - 44px)' }}
                     title="TensorBoard"
