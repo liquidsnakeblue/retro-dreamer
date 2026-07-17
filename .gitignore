@@ -52,3 +52,6 @@ Thumbs.db
 *:Zone.Identifier
 sheeprl/_retro_run.py
 training-state/
+
+# TS build artifacts
+frontend/tsconfig.tsbuildinfo
