@@ -30,6 +30,7 @@ from sheeprl.envs.config_validation import (  # noqa: F401
     OP_ALIASES,
     resolve_action_mappings,
     score_counters,
+    score_milestones,
     validate_training_config,
 )
 
@@ -430,27 +431,27 @@ class RetroDreamerWrapper(gym.Wrapper):
 
         # ---- Stateful exploration rewards (breadcrumb framework) ----
         # Both blocks run every step, INCLUDING reward-warmup steps: step()
-        # zeroes the returned total during warmup but the sets still update,
-        # so a milestone/screen already true at spawn is consumed silently
-        # and can never pay an unearned lump (same rule as warmup_steps).
+        # zeroes the returned total during warmup but the sets still update.
+        # Consequence (deliberate, and BROADER than spawn suppression): with
+        # warmup_steps > 0, ANY milestone/novelty that fires during warmup —
+        # even a genuine transition the agent caused — is consumed unpaid
+        # forever. Games relying on early milestones should keep warmup 0
+        # (spawn-armed lumps are handled by the baseline pass below instead).
 
         # First-time-only milestones: one-shot payout the first time an op
         # condition becomes true this episode (e.g. Zelda sword flag > 0).
-        for name, ms_cfg in self.training_config.get("reward", {}).get("milestones", {}).items():
-            if name in self._milestones_fired:
-                continue
-            val = info.get(ms_cfg.get("var"))
-            if val is None:
-                continue
-            ref = ms_cfg.get("reference", 0)
-            op = OP_ALIASES.get(ms_cfg.get("op"), ms_cfg.get("op"))
-            if (
-                (op == "greater-than" and val > ref)
-                or (op == "less-than" and val < ref)
-                or (op == "equal" and val == ref)
-            ):
-                self._milestones_fired.add(name)
-                reward += ms_cfg.get("reward", 0.0)
+        # The episode's FIRST reward step runs as a baseline pass: milestones
+        # already true at spawn (rotation states saved past the objective)
+        # are consumed unpaid — see score_milestones docstring. episode_step
+        # increments AFTER this call, so ==0 is exactly the first step; each
+        # reset() clears _milestones_fired, so every rotation track
+        # re-baselines against its own spawn.
+        ms_cfg = self.training_config.get("reward", {}).get("milestones", {})
+        if ms_cfg:
+            reward += score_milestones(
+                ms_cfg, info, self._milestones_fired,
+                baseline=(self.episode_step == 0),
+            )
 
         # Visited-set novelty: pay once per NEW combination of the listed
         # RAM variables this episode (e.g. keys ["level","screen_id"] pays

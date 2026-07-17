@@ -2,7 +2,7 @@
   "display_name": "Legend of Zelda (Nes)",
   "game_id": "LegendOfZelda-Nes-v0",
   "system": "Nes",
-  "default_state": "Overworld",
+  "default_state": "Overworld+SwordCavePre+PostSwordExit",
   "button_layout": [
     "B",
     "",

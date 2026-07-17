@@ -522,9 +522,13 @@ class TrainingPlanner:
 
     @staticmethod
     def _default_states(focused: dict) -> tuple[str, ...]:
-        default = focused.get("default_state")
+        # default_state may be a '+'-joined rotation (e.g. Zelda's
+        # "Overworld+SwordCavePre+PostSwordExit") — split it exactly like the
+        # resume path does, or _resolve_states would look the combined string
+        # up as ONE state file and 409 every fresh start using the default.
+        default = TrainingPlanner._split_states(focused.get("default_state"))
         if default:
-            return (default,)
+            return default
         states = focused.get("states") or []
         return (states[0]["file"],) if states else ()
 

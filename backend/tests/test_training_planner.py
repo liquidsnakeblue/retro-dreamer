@@ -207,6 +207,24 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[0][0], "/api/training/start")
         self.assertEqual(seen[0][1]["initial_state"], "hard+start")
 
+    async def test_plus_joined_default_state_splits_into_rotation(self):
+        # Regression: metadata default_state may itself be a '+'-joined
+        # rotation (Zelda "Overworld+SwordCavePre+PostSwordExit"). The fresh
+        # path must split it like the resume path does — before the fix,
+        # _default_states returned the combined string as ONE state and every
+        # fresh plan using the default 409'd as "unknown state(s)".
+        self.builder.state["focused_game"]["default_state"] = "start+hard"
+        proposal = self.planner.create_plan({"game_id": "Focus-Game"})
+        self.assertEqual(
+            [state["file"] for state in proposal["states"]],
+            ["start", "hard"],
+        )
+        self.assertEqual(proposal["launch"]["initial_state"], "start+hard")
+        self.assertEqual(
+            proposal["exact_request"]["body"]["initial_state"],
+            "start+hard",
+        )
+
     def test_resume_locks_every_effective_setting_from_resolved_config(self):
         self.add_head()
         proposal = self.planner.create_plan({"game_id": "Focus-Game"})
@@ -374,7 +392,7 @@ class TrainingPlannerTest(unittest.IsolatedAsyncioTestCase):
             self.planner.create_plan({"game_id": "Focus-Game"})
         focused["readiness"] = {"trainable": True, "blockers": []}
         focused["configs"]["training.json"]["reward"]["variables"] = {}
-        with self.assertRaisesRegex(PlannerError, "no reward variables"):
+        with self.assertRaisesRegex(PlannerError, "no reward source"):
             self.planner.create_plan({"game_id": "Focus-Game"})
 
     async def test_stale_and_one_time_guards_prevent_every_mutation(self):

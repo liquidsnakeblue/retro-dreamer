@@ -309,6 +309,50 @@ def resolve_action_mappings(action_defs: list, env_buttons: list, game_id: str):
     return rows, labels
 
 
+def score_milestones(milestones_cfg, info, fired, baseline=False):
+    """First-time-only milestone payouts: one-shot reward the first time an
+    op condition becomes true this episode (e.g. Zelda sword flag > 0).
+
+    baseline=True is the SPAWN-ARMED suppression pass, run on the episode's
+    first reward step: any milestone already true is consumed (added to
+    `fired`) WITHOUT paying. Rationale: a milestone rewards a TRANSITION the
+    agent caused; a save state that spawns with the condition true (e.g. a
+    rotation state saved after the sword grab) would otherwise pay an
+    unearned lump every episode — reward for existing, not for acting. The
+    first step is the earliest possible look because stable-retro's reset()
+    info does not carry data.json variables; the cost is that a milestone
+    genuinely earned within the very first frame_skip window (one agent
+    action) is silently consumed — acceptable, no real milestone flips that
+    fast from a legitimate spawn.
+
+    Milestones observed FALSE during the baseline pass stay armed and pay
+    normally when they later become true. Negative milestones (e.g. died)
+    follow the same rule: a state saved mid-death-cutscene should not be
+    charged for a death the agent didn't cause.
+
+    Pure function: mutates only `fired` (a per-episode set the caller owns).
+    Kept module-level so tests can drive it with recorded RAM traces.
+    """
+    total = 0.0
+    for name, cfg in milestones_cfg.items():
+        if name in fired:
+            continue
+        val = info.get(cfg.get("var"))
+        if val is None:
+            continue
+        ref = cfg.get("reference", 0)
+        op = OP_ALIASES.get(cfg.get("op"), cfg.get("op"))
+        if (
+            (op == "greater-than" and val > ref)
+            or (op == "less-than" and val < ref)
+            or (op == "equal" and val == ref)
+        ):
+            fired.add(name)
+            if not baseline:
+                total += cfg.get("reward", 0.0)
+    return total
+
+
 def score_counters(counters_cfg, prev_info, info, state):
     """Counted-event rewards attributed to a place, with diminishing returns.
 

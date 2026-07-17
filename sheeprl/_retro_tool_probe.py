@@ -164,7 +164,11 @@ for state in states_csv.split(","):
         # Per-episode stateful-reward simulation (novelty visited-sets +
         # fired milestones) — fresh per probe episode, like reset(). The
         # wrapper already consumed step-1's keys/milestones, so warm the
-        # simulated sets from step-1 info (discard the score).
+        # simulated sets from step-1 info (discard the score). This mirrors
+        # the wrapper's first-step BASELINE pass exactly: spawn-true
+        # milestones are consumed unpaid on both sides (score_milestones
+        # baseline=True), so rotation states saved past an objective can
+        # never pay an unearned lump at step 1.
         visited, fired, counters = {}, set(), {}
         expected_reward(prev, prev, 1, visited, fired, counters)
         # Step 1 is formula-unchecked but still counts toward fountain
