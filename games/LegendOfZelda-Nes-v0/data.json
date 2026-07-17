@@ -24,6 +24,10 @@
       "address": 1623,
       "type": "|u1"
     },
+    "kills": {
+      "address": 1575,
+      "type": "|u1"
+    },
     "rupees": {
       "address": 1645,
       "type": "|u1"
@@ -34,6 +38,10 @@
     },
     "hearts": {
       "address": 1647,
+      "type": "|u1"
+    },
+    "heart_fraction": {
+      "address": 1648,
       "type": "|u1"
     },
     "triforce": {

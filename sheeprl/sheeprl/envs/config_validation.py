@@ -22,6 +22,7 @@ _REWARD_VAR_KEYS = {
 _DONE_VAR_KEYS = {"op", "reference"}
 _MILESTONE_KEYS = {"var", "op", "reference", "reward"}
 _NOVELTY_KEYS = {"keys", "reward"}
+_COUNTER_KEYS = {"var", "context", "reward", "decay", "max_per_context", "max_event_delta"}
 
 
 def validate_training_config(game_id: str, cfg: dict, data_vars=None) -> None:
@@ -115,6 +116,77 @@ def validate_training_config(game_id: str, cfg: dict, data_vars=None) -> None:
             if bad:
                 problems.append(
                     f"{where}: key(s) {bad} are not data.json variables of "
+                    f"{game_id} — the rule would NEVER pay. Available: "
+                    f"{sorted(data_vars)}"
+                )
+
+    for name, var in (cfg.get("reward", {}).get("counters", {}) or {}).items():
+        where = f"reward.counters.{name}"
+        unknown = set(var) - _COUNTER_KEYS
+        if unknown:
+            problems.append(
+                f"{where}: unknown key(s) {sorted(unknown)} — a counter rule "
+                f"pays for INCREMENTS of <var> attributed to the current "
+                f"<context> tuple, at reward*decay^n, capped at "
+                f"max_per_context events per context per episode; it takes "
+                f'{{"var", "context": [vars], "reward", "max_per_context", '
+                f'optional "decay" (default 1.0), optional "max_event_delta" '
+                f"(default 1)}}."
+            )
+        missing = {"var", "context", "reward", "max_per_context"} - set(var)
+        if missing:
+            problems.append(
+                f"{where}: missing required key(s) {sorted(missing)} — "
+                f"max_per_context is REQUIRED (an uncapped counter is a "
+                f"farmable reward fountain)."
+            )
+        ctx = var.get("context")
+        if ctx is not None and (
+            not isinstance(ctx, list) or not ctx
+            or not all(isinstance(k, str) for k in ctx)
+        ):
+            problems.append(
+                f"{where}: 'context' must be a non-empty list of data.json "
+                f"variable names — events are attributed to (and capped per) "
+                f"this tuple."
+            )
+        decay = var.get("decay", 1.0)
+        if not isinstance(decay, (int, float)) or not (0 < decay <= 1):
+            problems.append(
+                f"{where}: 'decay' must be in (0, 1] — each successive event "
+                f"in a context pays reward*decay^n."
+            )
+        v = var.get("var")
+        if "var" in var and (not isinstance(v, str) or not v):
+            problems.append(f"{where}: 'var' must be a non-empty variable name.")
+        rw = var.get("reward")
+        if "reward" in var and (
+            isinstance(rw, bool) or not isinstance(rw, (int, float))
+        ):
+            problems.append(f"{where}: 'reward' must be a number.")
+        mpc = var.get("max_per_context")
+        if mpc is not None and (
+            isinstance(mpc, bool) or not isinstance(mpc, int) or mpc <= 0
+        ):
+            problems.append(
+                f"{where}: 'max_per_context' must be a positive integer."
+            )
+        med = var.get("max_event_delta")
+        if med is not None and (
+            isinstance(med, bool) or not isinstance(med, int) or med <= 0
+        ):
+            problems.append(
+                f"{where}: 'max_event_delta' must be a positive integer "
+                f"(events larger than this are rejected as garbage)."
+            )
+        if data_vars is not None:
+            bad = [
+                k for k in ([var.get("var")] + (ctx if isinstance(ctx, list) else []))
+                if isinstance(k, str) and k not in data_vars
+            ]
+            if bad:
+                problems.append(
+                    f"{where}: name(s) {bad} are not data.json variables of "
                     f"{game_id} — the rule would NEVER pay. Available: "
                     f"{sorted(data_vars)}"
                 )
@@ -235,3 +307,51 @@ def resolve_action_mappings(action_defs: list, env_buttons: list, game_id: str):
             + "\n  - ".join(problems)
         )
     return rows, labels
+
+
+def score_counters(counters_cfg, prev_info, info, state):
+    """Counted-event rewards attributed to a place, with diminishing returns.
+
+    A rule {"var", "context": [vars], "reward", "decay", "max_per_context",
+    "max_event_delta"} pays for INCREMENTS of var (each unit = one event),
+    attributed to the current context tuple, at reward * decay^n where n is
+    the number of events already paid for that context this episode, hard-
+    capped at max_per_context events per context.
+
+    Deliberate semantics, matched to real counter bytes (Zelda kill streak):
+    - An event only counts when the context tuple is IDENTICAL in the
+      previous and current step: scroll-flicker frames and a stale counter
+      value carried onto a newly entered screen can never pay (arrival is
+      not an event; only an increment WHILE ON the screen is).
+    - Decreases are ignored (damage-reset of a streak counter is not an
+      event and cannot re-arm extra payments: paid ordinals per context
+      only ever grow within an episode).
+    - Jumps larger than max_event_delta are rejected as garbage.
+
+    Pure function: mutates only `state` ({rule: {context_tuple: paid}}).
+    Kept module-level so tests can drive it with recorded RAM traces.
+    """
+    total = 0.0
+    for name, cfg in counters_cfg.items():
+        ctx_keys = cfg.get("context", [])
+        prev_ctx = tuple(prev_info.get(k) for k in ctx_keys)
+        cur_ctx = tuple(info.get(k) for k in ctx_keys)
+        if any(v is None for v in cur_ctx) or prev_ctx != cur_ctx:
+            continue
+        pv, cv = prev_info.get(cfg.get("var")), info.get(cfg.get("var"))
+        if pv is None or cv is None:
+            continue
+        delta = int(cv) - int(pv)
+        if delta <= 0 or delta > cfg.get("max_event_delta", 1):
+            continue
+        rule_state = state.setdefault(name, {})
+        paid = rule_state.get(cur_ctx, 0)
+        cap = cfg.get("max_per_context", 0)
+        decay = cfg.get("decay", 1.0)
+        for _ in range(delta):
+            if paid >= cap:
+                break
+            total += cfg.get("reward", 0.0) * (decay ** paid)
+            paid += 1
+        rule_state[cur_ctx] = paid
+    return total

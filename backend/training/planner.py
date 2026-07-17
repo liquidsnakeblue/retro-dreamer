@@ -337,8 +337,10 @@ class TrainingPlanner:
         # milestones/novelty (breadcrumb exploration rewards) are complete
         # reward sources in their own right — a config using only them is
         # valid, not "no reward".
-        has_breadcrumbs = bool(reward_block.get("milestones")) or bool(
-            reward_block.get("novelty")
+        has_breadcrumbs = (
+            bool(reward_block.get("milestones"))
+            or bool(reward_block.get("novelty"))
+            or bool(reward_block.get("counters"))
         )
         if not has_variables and not has_breadcrumbs:
             errors.append(

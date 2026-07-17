@@ -29,6 +29,7 @@ if not _IS_STABLE_RETRO_AVAILABLE:
 from sheeprl.envs.config_validation import (  # noqa: F401
     OP_ALIASES,
     resolve_action_mappings,
+    score_counters,
     validate_training_config,
 )
 
@@ -238,6 +239,7 @@ class RetroDreamerWrapper(gym.Wrapper):
         # territory efficiently every life.
         self._visited: Dict[str, set] = {}
         self._milestones_fired: set = set()
+        self._counter_state: Dict[str, Dict[tuple, int]] = {}
 
         # Optional raw A/V tap: called (frame_rgb, audio_int16) for EVERY
         # emulator frame inside the frame_skip loop — full 60fps + sound for
@@ -274,6 +276,7 @@ class RetroDreamerWrapper(gym.Wrapper):
         self.prev_info = info
         self._visited = {}
         self._milestones_fired = set()
+        self._counter_state = {}
         return {"rgb": self._process_observation(obs)}, info
 
     def step(self, action):
@@ -337,9 +340,15 @@ class RetroDreamerWrapper(gym.Wrapper):
             if var_name not in info:
                 continue
 
-            # Penalty (health loss, etc.)
+            # Penalty (health loss, etc.). max_delta (when set) caps the
+            # charged loss: packed bytes (e.g. Zelda 0x66F, containers in
+            # the high nibble) can swing by 16 on transients — a capped
+            # penalty pays the real event, never the encoding artifact.
             if "penalty" in var_cfg and var_name in self.prev_info:
                 loss = max(0, self.prev_info[var_name] - info[var_name])
+                pcap = var_cfg.get("max_delta")
+                if pcap:
+                    loss = min(loss, pcap)
                 reward -= loss * var_cfg["penalty"]
                 # Optional smaller payment for REGAINING the variable (pit
                 # strips). MUST stay < penalty: then any deliberate
@@ -454,6 +463,15 @@ class RetroDreamerWrapper(gym.Wrapper):
             if key not in seen:
                 seen.add(key)
                 reward += nv_cfg.get("reward", 0.0)
+
+        # Counted events per place with diminishing returns (see
+        # score_counters docstring): e.g. kills on each screen pay
+        # geometrically less and cap out — refarming a screen tends to zero.
+        counters_cfg = self.training_config.get("reward", {}).get("counters", {})
+        if counters_cfg:
+            reward += score_counters(
+                counters_cfg, self.prev_info, info, self._counter_state
+            )
 
         return reward
 

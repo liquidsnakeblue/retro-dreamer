@@ -36,10 +36,11 @@ training = json.loads((Path(game_dir) / "training.json").read_text()) if (Path(g
 reward_cfg = training.get("reward", {}).get("variables", {})
 milestone_cfg = training.get("reward", {}).get("milestones", {})
 novelty_cfg = training.get("reward", {}).get("novelty", {})
+counter_cfg = training.get("reward", {}).get("counters", {})
 warmup = training.get("reward", {}).get("warmup_steps", 0)
 
 
-def expected_reward(prev, cur, step, visited, fired):
+def expected_reward(prev, cur, step, visited, fired, counters):
     """Independent reimplementation of RetroDreamerWrapper reward semantics.
 
     visited/fired are per-episode sets the caller owns (novelty + milestone
@@ -53,6 +54,9 @@ def expected_reward(prev, cur, step, visited, fired):
             continue
         if "penalty" in cfg:
             loss = max(0, prev[var] - cur[var])
+            pcap = cfg.get("max_delta")
+            if pcap:
+                loss = min(loss, pcap)
             r -= loss * cfg["penalty"]
             heal = cfg.get("heal_reward")
             if heal:
@@ -99,6 +103,30 @@ def expected_reward(prev, cur, step, visited, fired):
             seen.add(key)
             r += cfg.get("reward", 0.0)
 
+    # Counted events per place, diminishing (independent reimplementation of
+    # the wrapper's score_counters): pays for var INCREMENTS only when the
+    # context tuple is identical across the two steps.
+    for name, cfg in counter_cfg.items():
+        ctx_keys = cfg.get("context", [])
+        pctx = tuple(prev.get(k) for k in ctx_keys)
+        cctx = tuple(cur.get(k) for k in ctx_keys)
+        if any(v is None for v in cctx) or pctx != cctx:
+            continue
+        pv, cv = prev.get(cfg.get("var")), cur.get(cfg.get("var"))
+        if pv is None or cv is None:
+            continue
+        d = int(cv) - int(pv)
+        if d <= 0 or d > cfg.get("max_event_delta", 1):
+            continue
+        rs = counters.setdefault(name, {})
+        paid = rs.get(cctx, 0)
+        for _ in range(d):
+            if paid >= cfg.get("max_per_context", 0):
+                break
+            r += cfg.get("reward", 0.0) * (cfg.get("decay", 1.0) ** paid)
+            paid += 1
+        rs[cctx] = paid
+
     return 0.0 if step <= warmup else r
 
 
@@ -137,15 +165,15 @@ for state in states_csv.split(","):
         # fired milestones) — fresh per probe episode, like reset(). The
         # wrapper already consumed step-1's keys/milestones, so warm the
         # simulated sets from step-1 info (discard the score).
-        visited, fired = {}, set()
-        expected_reward(prev, prev, 1, visited, fired)
+        visited, fired, counters = {}, set(), {}
+        expected_reward(prev, prev, 1, visited, fired, counters)
         # Step 1 is formula-unchecked but still counts toward fountain
         # detection — a huge unearned spawn payout must not hide there.
         total, max_dev, max_abs, end, end_reason = float(reward), 0.0, abs(float(reward)), None, "survived"
         for step in range(2, steps + 1):
             obs, reward, term, trunc, info = env.step(a)
             cur = {k: info[k] for k in tracked}
-            dev = abs(float(reward) - expected_reward(prev, cur, step, visited, fired))
+            dev = abs(float(reward) - expected_reward(prev, cur, step, visited, fired, counters))
             max_dev = max(max_dev, dev)
             max_abs = max(max_abs, abs(float(reward)))
             total += float(reward)

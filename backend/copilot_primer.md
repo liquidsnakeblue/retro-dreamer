@@ -198,6 +198,11 @@ and names make both impossible.
     },
     "novelty": {
       "screens": {"keys": ["level", "screen_id"], "reward": 3.0}
+    },
+    "counters": {
+      "screen_kills": {"var": "kills", "context": ["level", "screen_id"],
+                       "reward": 2.0, "decay": 0.5, "max_per_context": 6,
+                       "max_event_delta": 3}
     }
   },
   "done": {
@@ -249,6 +254,18 @@ and names make both impossible.
     validator rejects typos when the workspace has a data.json).
   - Don't set warmup_steps long enough to overlap a real early achievement —
     a milestone reached during warmup is consumed unpaid for that episode.
+  - `counters` (counted events per place, diminishing): pays for INCREMENTS
+    of `var`, attributed to the current `context` tuple, at
+    reward*decay^n (n = events already paid for that context this episode),
+    hard-capped at `max_per_context` events per context. max_per_context is
+    REQUIRED. Anti-farm by construction: refarming a place tends to zero and
+    stops at the cap. An increment only counts when the context tuple is
+    IDENTICAL across two consecutive steps — so scroll-flicker frames and a
+    stale counter value carried onto a new screen never pay (arrival is not
+    an event). Decreases (e.g. a streak counter resetting on damage) are
+    ignored and can never re-arm extra payments. Jumps > max_event_delta
+    (default 1) are rejected as garbage. Use for kill counters, pickups —
+    any "did a countable thing HERE" signal.
 - Magnitude guidance: keep routine per-step reward within about ±20 (the
   F-Zero recipe maxes ~11/step). One-time bonuses (lap/level completion)
   may be bigger. Death should cost enough to matter (F-Zero: -1/health unit;

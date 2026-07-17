@@ -6,6 +6,13 @@
         "reward": 300,
         "delta": "signed",
         "max_delta": 1
+      },
+      "hearts": {
+        "penalty": 0.5,
+        "max_delta": 1
+      },
+      "heart_fraction": {
+        "penalty": 0.00390625
       }
     },
     "milestones": {
@@ -20,6 +27,12 @@
         "op": "equal",
         "reference": 1,
         "reward": 100
+      },
+      "died": {
+        "var": "game_mode",
+        "op": "equal",
+        "reference": 17,
+        "reward": -10
       }
     },
     "novelty": {
@@ -29,6 +42,29 @@
           "screen_id"
         ],
         "reward": 3.0
+      }
+    },
+    "counters": {
+      "screen_kills": {
+        "var": "kills",
+        "context": [
+          "level",
+          "screen_id"
+        ],
+        "reward": 2.0,
+        "decay": 0.5,
+        "max_per_context": 6,
+        "max_event_delta": 3
+      },
+      "keys_found": {
+        "var": "keys",
+        "context": [
+          "level"
+        ],
+        "reward": 5.0,
+        "decay": 1.0,
+        "max_per_context": 6,
+        "max_event_delta": 1
       }
     }
   },
