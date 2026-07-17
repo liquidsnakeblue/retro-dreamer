@@ -329,7 +329,20 @@ class GameManager:
                 data.get("actions", []), buttons, game_id
             )
         elif filename == "training.json":
-            _config_validation().validate_training_config(game_id, data)
+            # Workspace data.json (when present) lets the validator catch
+            # typo'd milestone/novelty variable names at write time.
+            data_vars = None
+            data_path = self.games_dir / game_id / "data.json"
+            if data_path.exists():
+                try:
+                    data_vars = set(
+                        (json.loads(data_path.read_text()).get("info") or {}).keys()
+                    )
+                except Exception:
+                    data_vars = None
+            _config_validation().validate_training_config(
+                game_id, data, data_vars=data_vars
+            )
 
         game_dir = self.games_dir / game_id
         game_dir.mkdir(parents=True, exist_ok=True)

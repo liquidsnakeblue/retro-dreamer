@@ -331,9 +331,20 @@ class TrainingPlanner:
         elif any(not isinstance(row, dict) or not row.get("name")
                  or not isinstance(row.get("buttons"), list) for row in action_rows):
             errors.append("actions.json contains an invalid action")
-        reward_vars = ((training.get("reward") or {}).get("variables"))
-        if not isinstance(reward_vars, dict) or not reward_vars:
-            errors.append("training.json has no reward variables")
+        reward_block = training.get("reward") or {}
+        reward_vars = reward_block.get("variables")
+        has_variables = isinstance(reward_vars, dict) and bool(reward_vars)
+        # milestones/novelty (breadcrumb exploration rewards) are complete
+        # reward sources in their own right — a config using only them is
+        # valid, not "no reward".
+        has_breadcrumbs = bool(reward_block.get("milestones")) or bool(
+            reward_block.get("novelty")
+        )
+        if not has_variables and not has_breadcrumbs:
+            errors.append(
+                "training.json has no reward source (variables, milestones, "
+                "or novelty)"
+            )
         if errors:
             raise PlannerError(409, "invalid training workspace: " + "; ".join(errors))
 

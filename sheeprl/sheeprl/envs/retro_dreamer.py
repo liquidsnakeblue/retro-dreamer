@@ -102,8 +102,17 @@ class RetroDreamerWrapper(gym.Wrapper):
             self.training_config = {}
         # Unknown keys silently pay zero reward / never fire done — a config
         # written against an imagined schema must die HERE, not after hours
-        # of zero-signal training.
-        validate_training_config(game_id, self.training_config)
+        # of zero-signal training. data.json vars (when available) let the
+        # validator also catch typo'd milestone/novelty variable names.
+        data_vars = None
+        data_path = self.game_dir / "data.json"
+        if data_path.exists():
+            try:
+                with open(data_path) as f:
+                    data_vars = set((json.load(f).get("info") or {}).keys())
+            except Exception:
+                data_vars = None
+        validate_training_config(game_id, self.training_config, data_vars=data_vars)
 
         # Training/evaluation binds to the exact ordered actions captured at
         # launch.  Reading actions.json directly is reserved for explicit
@@ -221,6 +230,15 @@ class RetroDreamerWrapper(gym.Wrapper):
         self.episode_reward = 0.0
         self.prev_info: Dict[str, Any] = {}
 
+        # Stateful exploration rewards, PER-EPISODE scope (cleared on reset):
+        # visited-set novelty + first-time-only milestones. Scope is
+        # deliberate — a run-persistent set would make the same state pay
+        # differently as training progresses (non-stationary reward, poisons
+        # value learning). Per-episode, the agent learns a ROUTE: sweep new
+        # territory efficiently every life.
+        self._visited: Dict[str, set] = {}
+        self._milestones_fired: set = set()
+
         # Optional raw A/V tap: called (frame_rgb, audio_int16) for EVERY
         # emulator frame inside the frame_skip loop — full 60fps + sound for
         # live streaming, independent of the 64x64 agent observation.
@@ -254,6 +272,8 @@ class RetroDreamerWrapper(gym.Wrapper):
         self.episode_step = 0
         self.episode_reward = 0.0
         self.prev_info = info
+        self._visited = {}
+        self._milestones_fired = set()
         return {"rgb": self._process_observation(obs)}, info
 
     def step(self, action):
@@ -398,6 +418,42 @@ class RetroDreamerWrapper(gym.Wrapper):
                 if val >= threshold and max_val > 0:
                     norm = min(val / max_val, 1.0)
                     reward += coeff * base_r * (np.exp(norm) - 1) / (np.e - 1)
+
+        # ---- Stateful exploration rewards (breadcrumb framework) ----
+        # Both blocks run every step, INCLUDING reward-warmup steps: step()
+        # zeroes the returned total during warmup but the sets still update,
+        # so a milestone/screen already true at spawn is consumed silently
+        # and can never pay an unearned lump (same rule as warmup_steps).
+
+        # First-time-only milestones: one-shot payout the first time an op
+        # condition becomes true this episode (e.g. Zelda sword flag > 0).
+        for name, ms_cfg in self.training_config.get("reward", {}).get("milestones", {}).items():
+            if name in self._milestones_fired:
+                continue
+            val = info.get(ms_cfg.get("var"))
+            if val is None:
+                continue
+            ref = ms_cfg.get("reference", 0)
+            op = OP_ALIASES.get(ms_cfg.get("op"), ms_cfg.get("op"))
+            if (
+                (op == "greater-than" and val > ref)
+                or (op == "less-than" and val < ref)
+                or (op == "equal" and val == ref)
+            ):
+                self._milestones_fired.add(name)
+                reward += ms_cfg.get("reward", 0.0)
+
+        # Visited-set novelty: pay once per NEW combination of the listed
+        # RAM variables this episode (e.g. keys ["level","screen_id"] pays
+        # per new screen). Inherently farm-proof: revisits pay nothing.
+        for name, nv_cfg in self.training_config.get("reward", {}).get("novelty", {}).items():
+            key = tuple(info.get(k) for k in nv_cfg.get("keys", []))
+            if any(v is None for v in key):
+                continue
+            seen = self._visited.setdefault(name, set())
+            if key not in seen:
+                seen.add(key)
+                reward += nv_cfg.get("reward", 0.0)
 
         return reward
 

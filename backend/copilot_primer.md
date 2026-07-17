@@ -191,6 +191,13 @@ and names make both impossible.
       "pos":    {"reward": 10, "delta": "signed", "wrap": 65536, "max_delta": 300},
       "health": {"penalty": 1.0, "heal_reward": 0.25},
       "speed":  {"mode": "quadratic", "max_value": 500, "base_reward": 0.1}
+    },
+    "milestones": {
+      "got_sword":   {"var": "sword", "op": "greater-than", "reference": 0, "reward": 50},
+      "in_dungeon1": {"var": "level", "op": "equal", "reference": 1, "reward": 100}
+    },
+    "novelty": {
+      "screens": {"keys": ["level", "screen_id"], "reward": 3.0}
     }
   },
   "done": {
@@ -219,6 +226,29 @@ and names make both impossible.
   the comparison value key is `reference`, NOT "value".
 - `warmup_steps` (default 0, use ~10): zeroes reward for the first N steps
   so state-load settling noise doesn't pay.
+- BREADCRUMBS for exploration games (both are per-episode, reset each life):
+  - `milestones` (first-time-only bonuses): each entry pays its `reward`
+    ONCE per episode, the first time `<var> <op> <reference>` becomes true.
+    Takes exactly {"var", "op", "reference", "reward"}. Use for quest beats:
+    entered the dungeon, picked up the sword, new triforce bit.
+  - `novelty` (visited-set exploration): each rule pays its `reward` once
+    per episode for every NEW combination of its `keys` values (data.json
+    variable names). {"keys": ["level","screen_id"], "reward": 3} = pay 3
+    per new screen visited. Revisits pay nothing — farm-proof by design.
+  - Both update during warmup but pay 0 there: anything already true at
+    spawn (the starting screen, a flag the save state begins with) is
+    consumed silently and never pays an unearned lump.
+  - Sizing: novelty per-place small (1-5); milestones big (50-200, they are
+    the quest breadcrumbs). Do NOT put a plain delta reward on a re-enterable
+    flag (like a dungeon-level byte) — entering pays every re-entry = farm
+    loop; that is exactly what milestones exist for.
+  - novelty `keys` must be LOW-CARDINALITY discrete vars (level, screen_id,
+    room index) — NEVER raw x/y or other continuous coordinates: every step
+    becomes "new", the reward turns into a constant drip, and the visited
+    set balloons. `var`/`keys` must be exact data.json variable names (the
+    validator rejects typos when the workspace has a data.json).
+  - Don't set warmup_steps long enough to overlap a real early achievement —
+    a milestone reached during warmup is consumed unpaid for that episode.
 - Magnitude guidance: keep routine per-step reward within about ±20 (the
   F-Zero recipe maxes ~11/step). One-time bonuses (lap/level completion)
   may be bigger. Death should cost enough to matter (F-Zero: -1/health unit;

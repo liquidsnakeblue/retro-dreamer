@@ -20,6 +20,23 @@
         "power": 2.0,
         "min_threshold": 0
       }
+    },
+    "milestones": {
+      "reached_speed_300": {
+        "var": "speed",
+        "op": "greater-than",
+        "reference": 300,
+        "reward": 25
+      }
+    },
+    "novelty": {
+      "positions": {
+        "keys": [
+          "pos",
+          "reverse"
+        ],
+        "reward": 2.0
+      }
     }
   },
   "done": {

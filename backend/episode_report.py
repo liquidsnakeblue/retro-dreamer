@@ -29,6 +29,14 @@ def assign_roles(vars_, cfg):
     """
     rcfg = (cfg.get("reward") or {}).get("variables", {})
     dcfg = (cfg.get("done") or {}).get("variables", {})
+    # Breadcrumb rewards reference vars OUTSIDE reward.variables — surface
+    # them as declared roles so a never-firing milestone reads as "milestone
+    # never reached", not as an undeclared constant.
+    _mcfg = (cfg.get("reward") or {}).get("milestones", {}) or {}
+    _ncfg = (cfg.get("reward") or {}).get("novelty", {}) or {}
+    ms_vars = {c.get("var") for c in _mcfg.values() if isinstance(c, dict)}
+    nv_keys = {k for c in _ncfg.values() if isinstance(c, dict)
+               for k in (c.get("keys") or [])}
     roles = {}
     for name, arr in vars_.items():
         R, why = set(), []
@@ -60,6 +68,11 @@ def assign_roles(vars_, cfg):
                 R.add("objective"); why.append("rewarded, only-increases (accumulator)")
             else:
                 R.add("progress"); why.append("rewarded positional")
+        # Breadcrumb-declared vars (one-shot milestones / novelty keys)
+        if name in ms_vars:
+            R.add("milestone"); why.append("milestone breadcrumb (one-shot)")
+        if name in nv_keys:
+            R.add("progress"); why.append("novelty visited-set key")
         # Mode-style and future reward configs are still declared reward
         # signals even when they do not expose a scalar delta-reward key.
         known = {"timer", "resource", "milestone", "objective", "progress"}
@@ -80,7 +93,8 @@ def assign_roles(vars_, cfg):
             R.add("context"); why.append("constant this episode")
         roles[name] = {
             "roles": R, "wrap": wrap, "why": ", ".join(why),
-            "continuous": continuous, "configured": name in rcfg,
+            "continuous": continuous,
+            "configured": name in rcfg or name in ms_vars or name in nv_keys,
             "max_delta": r.get("max_delta"), "n_distinct": n_distinct,
         }
     return roles

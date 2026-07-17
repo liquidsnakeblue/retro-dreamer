@@ -20,12 +20,19 @@ _REWARD_VAR_KEYS = {
     "scaling_coefficient", "power", "min_threshold",
 }
 _DONE_VAR_KEYS = {"op", "reference"}
+_MILESTONE_KEYS = {"var", "op", "reference", "reward"}
+_NOVELTY_KEYS = {"keys", "reward"}
 
 
-def validate_training_config(game_id: str, cfg: dict) -> None:
+def validate_training_config(game_id: str, cfg: dict, data_vars=None) -> None:
     """Reject training.json configs the reward/done engine would silently
     ignore. Every error message states the fix — these are read by humans
-    and by the copilot."""
+    and by the copilot.
+
+    data_vars: optional set of the game's data.json variable names. When
+    provided, milestone 'var' and novelty 'keys' entries are checked against
+    it — a typo'd name would otherwise validate and then NEVER pay (a dead
+    quest breadcrumb looks identical to "agent hasn't gotten there yet")."""
     problems = []
 
     for name, var in (cfg.get("reward", {}).get("variables", {}) or {}).items():
@@ -52,6 +59,65 @@ def validate_training_config(game_id: str, cfg: dict) -> None:
                 f"{where}: config has neither 'reward' nor 'penalty' — this "
                 f"variable would never pay anything."
             )
+
+    for name, var in (cfg.get("reward", {}).get("milestones", {}) or {}).items():
+        where = f"reward.milestones.{name}"
+        unknown = set(var) - _MILESTONE_KEYS
+        if unknown:
+            problems.append(
+                f"{where}: unknown key(s) {sorted(unknown)} — a milestone is a "
+                f"ONE-SHOT payout the first time <var> <op> <reference> becomes "
+                f'true in an episode; it takes exactly {{"var": <data.json '
+                f'variable>, "op": <op>, "reference": <number>, "reward": <amount>}}.'
+            )
+        missing = {"var", "op", "reference", "reward"} - set(var)
+        if missing:
+            problems.append(
+                f"{where}: missing required key(s) {sorted(missing)} — all "
+                f"four of var/op/reference/reward are required (an implicit "
+                f"reference is a footgun)."
+            )
+        if var.get("op") not in OP_ALIASES:
+            problems.append(
+                f"{where}: op '{var.get('op')}' not recognized — use one of "
+                f"{sorted(set(OP_ALIASES.values()))} (or <, >, ==)"
+            )
+        if data_vars is not None and "var" in var and var["var"] not in data_vars:
+            problems.append(
+                f"{where}: var '{var['var']}' is not a data.json variable of "
+                f"{game_id} — it would NEVER fire. Available: {sorted(data_vars)}"
+            )
+
+    for name, var in (cfg.get("reward", {}).get("novelty", {}) or {}).items():
+        where = f"reward.novelty.{name}"
+        unknown = set(var) - _NOVELTY_KEYS
+        if unknown:
+            problems.append(
+                f"{where}: unknown key(s) {sorted(unknown)} — a novelty rule "
+                f"pays once per episode for each NEW combination of its keys' "
+                f'values; it takes exactly {{"keys": [<data.json variables>], '
+                f'"reward": <amount per new combination>}}.'
+            )
+        keys = var.get("keys")
+        if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys):
+            problems.append(
+                f"{where}: 'keys' must be a non-empty list of data.json "
+                f"variable names (e.g. [\"level\", \"screen_id\"]) — their "
+                f"combined values define what counts as a new place."
+            )
+        if "reward" not in var:
+            problems.append(
+                f"{where}: 'reward' is required (amount paid per newly seen "
+                f"combination)."
+            )
+        if data_vars is not None and isinstance(keys, list):
+            bad = [k for k in keys if isinstance(k, str) and k not in data_vars]
+            if bad:
+                problems.append(
+                    f"{where}: key(s) {bad} are not data.json variables of "
+                    f"{game_id} — the rule would NEVER pay. Available: "
+                    f"{sorted(data_vars)}"
+                )
 
     for name, var in (cfg.get("done", {}).get("variables", {}) or {}).items():
         where = f"done.variables.{name}"

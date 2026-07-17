@@ -27,20 +27,26 @@ pyglet.options["shadow_window"] = False
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from sheeprl.envs.retro_dreamer import RetroDreamerWrapper
+from sheeprl.envs.retro_dreamer import OP_ALIASES, RetroDreamerWrapper
 
 game_id, game_dir, states_csv, steps = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 actions_arg = sys.argv[5] if len(sys.argv) > 5 else "all"
 
 training = json.loads((Path(game_dir) / "training.json").read_text()) if (Path(game_dir) / "training.json").exists() else {}
 reward_cfg = training.get("reward", {}).get("variables", {})
+milestone_cfg = training.get("reward", {}).get("milestones", {})
+novelty_cfg = training.get("reward", {}).get("novelty", {})
 warmup = training.get("reward", {}).get("warmup_steps", 0)
 
 
-def expected_reward(prev, cur, step):
-    """Independent reimplementation of RetroDreamerWrapper reward semantics."""
-    if step <= warmup:
-        return 0.0
+def expected_reward(prev, cur, step, visited, fired):
+    """Independent reimplementation of RetroDreamerWrapper reward semantics.
+
+    visited/fired are per-episode sets the caller owns (novelty + milestone
+    state). They must update on EVERY step — including warmup steps, whose
+    returned reward is zeroed — mirroring the wrapper's compute-then-zero
+    order, so spawn-true milestones/screens are consumed without paying.
+    """
     r = 0.0
     for var, cfg in reward_cfg.items():
         if var not in cur or var not in prev:
@@ -71,7 +77,29 @@ def expected_reward(prev, cur, step):
             mx = cfg.get("max_speed", cfg.get("max_value", 500.0))
             if cur[var] >= cfg.get("min_threshold", 0.0) and mx > 0:
                 r += cfg.get("base_reward", 0.1) * min(cur[var] / mx, 1.0)
-    return r
+
+    for name, cfg in milestone_cfg.items():
+        if name in fired:
+            continue
+        v = cur.get(cfg.get("var"))
+        if v is None:
+            continue
+        ref = cfg.get("reference", 0)
+        op = OP_ALIASES.get(cfg.get("op"), cfg.get("op"))
+        if (op == "greater-than" and v > ref) or (op == "less-than" and v < ref) or (op == "equal" and v == ref):
+            fired.add(name)
+            r += cfg.get("reward", 0.0)
+
+    for name, cfg in novelty_cfg.items():
+        key = tuple(cur.get(k) for k in cfg.get("keys", []))
+        if any(v is None for v in key):
+            continue
+        seen = visited.setdefault(name, set())
+        if key not in seen:
+            seen.add(key)
+            r += cfg.get("reward", 0.0)
+
+    return 0.0 if step <= warmup else r
 
 
 results = []
@@ -96,16 +124,28 @@ for state in states_csv.split(","):
     action_list = list(range(n_actions)) if actions_arg == "all" else [int(a) for a in actions_arg.split(",")]
     for a in action_list:
         obs, info = env.reset(seed=42)
+        # stable-retro's reset() info does NOT carry the data.json variables —
+        # they first appear in step() info. Step once (unchecked for formula
+        # deviation) to establish the tracked set, exactly like the wrapper's
+        # own first _calculate_reward call.
         obs, reward, term, trunc, info = env.step(a)
         tracked = [k for k in info if isinstance(info.get(k), (int, float))]
         prev = {k: info[k] for k in tracked}
         var_min = dict(prev)
         var_max = dict(prev)
-        total, max_dev, max_abs, end, end_reason = float(reward), abs(float(reward)), 0.0, None, "survived"
+        # Per-episode stateful-reward simulation (novelty visited-sets +
+        # fired milestones) — fresh per probe episode, like reset(). The
+        # wrapper already consumed step-1's keys/milestones, so warm the
+        # simulated sets from step-1 info (discard the score).
+        visited, fired = {}, set()
+        expected_reward(prev, prev, 1, visited, fired)
+        # Step 1 is formula-unchecked but still counts toward fountain
+        # detection — a huge unearned spawn payout must not hide there.
+        total, max_dev, max_abs, end, end_reason = float(reward), 0.0, abs(float(reward)), None, "survived"
         for step in range(2, steps + 1):
             obs, reward, term, trunc, info = env.step(a)
             cur = {k: info[k] for k in tracked}
-            dev = abs(float(reward) - expected_reward(prev, cur, step))
+            dev = abs(float(reward) - expected_reward(prev, cur, step, visited, fired))
             max_dev = max(max_dev, dev)
             max_abs = max(max_abs, abs(float(reward)))
             total += float(reward)
