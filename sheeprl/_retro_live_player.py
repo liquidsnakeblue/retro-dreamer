@@ -8,6 +8,7 @@ download into <video> stutters unpredictably in Chrome).
 Usage:
   RETRO_LIVE_HLS_DIR=/tmp/retro-dreamer-live python _retro_live_player.py [checkpoint|latest] [initial_state]
 """
+import json
 import os
 import subprocess
 import sys
@@ -120,6 +121,16 @@ _, _, _, _, player = build_agent(
 inner = env
 while not isinstance(inner, RetroDreamerWrapper):
     inner = inner.env
+# Strict-train / lenient-eval split: training.json may end the episode on any
+# damage, which is unwatchable in playback. evaluation.json (when present)
+# supplies the done rules for watching only.
+_eval_path = inner.game_dir / "evaluation.json"
+if _eval_path.exists():
+    with open(_eval_path) as _f:
+        _eval_cfg = json.load(_f)
+    if "done" in _eval_cfg:
+        inner.training_config["done"] = _eval_cfg["done"]
+        log(f"evaluation done-rules active: {json.dumps(_eval_cfg['done'])}")
 retro_env = inner._env
 audio_rate = int(retro_env.em.get_audio_rate())
 h, w = retro_env.observation_space.shape[:2]

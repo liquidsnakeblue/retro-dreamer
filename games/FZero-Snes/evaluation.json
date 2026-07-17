@@ -1,0 +1,15 @@
+{
+  "_comment": "Watch/playback done-rules ONLY (strict-train / lenient-eval split, per the 2018 Lucas Thompson design). Training uses training.json; the live player and recorder swap in these done rules so a wall tap doesn't end the show.",
+  "done": {
+    "variables": {
+      "health": {
+        "op": "less-than",
+        "reference": 100
+      },
+      "race_on": {
+        "op": "equal",
+        "reference": 0
+      }
+    }
+  }
+}
