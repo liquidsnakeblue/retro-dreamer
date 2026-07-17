@@ -1,0 +1,43 @@
+{
+  "reward": {
+    "warmup_steps": 0,
+    "variables": {
+      "triforce": {
+        "reward": 300,
+        "delta": "signed",
+        "max_delta": 1
+      }
+    },
+    "milestones": {
+      "got_sword": {
+        "var": "sword",
+        "op": "greater-than",
+        "reference": 0,
+        "reward": 50
+      },
+      "entered_dungeon1": {
+        "var": "level",
+        "op": "equal",
+        "reference": 1,
+        "reward": 100
+      }
+    },
+    "novelty": {
+      "screens": {
+        "keys": [
+          "level",
+          "screen_id"
+        ],
+        "reward": 3.0
+      }
+    }
+  },
+  "done": {
+    "variables": {
+      "game_mode": {
+        "op": "equal",
+        "reference": 17
+      }
+    }
+  }
+}

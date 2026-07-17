@@ -1,0 +1,44 @@
+{
+  "actions": [
+    {
+      "name": "NoOp",
+      "buttons": []
+    },
+    {
+      "name": "Up",
+      "buttons": [
+        "UP"
+      ]
+    },
+    {
+      "name": "Down",
+      "buttons": [
+        "DOWN"
+      ]
+    },
+    {
+      "name": "Left",
+      "buttons": [
+        "LEFT"
+      ]
+    },
+    {
+      "name": "Right",
+      "buttons": [
+        "RIGHT"
+      ]
+    },
+    {
+      "name": "A",
+      "buttons": [
+        "A"
+      ]
+    },
+    {
+      "name": "B",
+      "buttons": [
+        "B"
+      ]
+    }
+  ]
+}

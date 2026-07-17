@@ -816,8 +816,17 @@ class DreamerV3Trainer:
 
         exit_code = proc.wait()
         active_run = self._active_run
-        if active_run is not None and active_run[0] is proc:
+        is_current = active_run is not None and active_run[0] is proc
+        if is_current:
             self._active_run = None
+        if not is_current:
+            # A superseded child (e.g. the game we switched AWAY from) exited
+            # while a NEW run is already TRAINING. Its (expected) SIGTERM must
+            # not be reported as the new run's crash — this exact race marked
+            # a healthy fresh launch as ERROR while it kept training.
+            print(f"[Trainer] Stale monitor: superseded child exited with "
+                  f"code {exit_code} (ignored; a newer run owns the state)")
+            return
         if exit_code != 0 and self.state == TrainingState.TRAINING:
             self._error_message = (
                 f"SheepRL exited with code {exit_code}. Last output: {last_line}"

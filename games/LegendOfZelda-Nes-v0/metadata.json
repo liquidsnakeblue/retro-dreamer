@@ -1,0 +1,17 @@
+{
+  "display_name": "Legend of Zelda (Nes)",
+  "game_id": "LegendOfZelda-Nes-v0",
+  "system": "Nes",
+  "default_state": "Overworld",
+  "button_layout": [
+    "B",
+    "",
+    "Select",
+    "Start",
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "A"
+  ]
+}
