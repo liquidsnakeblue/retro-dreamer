@@ -27,6 +27,54 @@
     "y": {
       "address": 8260496,
       "type": "<u2"
+    },
+    "track_index": {
+      "address": 83,
+      "type": "|u1"
+    },
+    "mode": {
+      "address": 88,
+      "type": "|u1"
+    },
+    "difficulty": {
+      "address": 87,
+      "type": "|u1"
+    },
+    "league": {
+      "address": 144,
+      "type": "|u1"
+    },
+    "gs_main": {
+      "address": 84,
+      "type": "|u1"
+    },
+    "gs_sub": {
+      "address": 85,
+      "type": "|u1"
+    },
+    "gs_3rd": {
+      "address": 86,
+      "type": "|u1"
+    },
+    "finish_flags": {
+      "address": 195,
+      "type": "|u1"
+    },
+    "place_x2": {
+      "address": 8261968,
+      "type": "|u1"
+    },
+    "menu_cursor": {
+      "address": 90,
+      "type": "|u1"
+    },
+    "lives": {
+      "address": 89,
+      "type": "|u1"
+    },
+    "frame_ctr": {
+      "address": 154,
+      "type": "|u1"
     }
   }
 }
