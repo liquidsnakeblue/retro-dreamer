@@ -28,6 +28,8 @@ if not _IS_STABLE_RETRO_AVAILABLE:
 # here — the probe and older callers import these names from this module.
 from sheeprl.envs.config_validation import (  # noqa: F401
     OP_ALIASES,
+    check_done,
+    episode_end_flags,
     resolve_action_mappings,
     score_counters,
     score_milestones,
@@ -321,8 +323,18 @@ class RetroDreamerWrapper(gym.Wrapper):
 
         processed_obs = self._process_observation(obs)
 
-        if self._check_done(info):
-            terminated = True
+        # Episode-end classification (Opus-verified plumbing 2026-07-19):
+        # sheeprl stores terminated and truncated as SEPARATE buffer arrays
+        # and trains the continue predictor on terminated ONLY, so routing a
+        # SUCCESS end (done var with "success": true) to truncated makes the
+        # continue head learn c~1 at the success screen and lambda-returns
+        # bootstrap V(s_last) — success is not death. All routing semantics
+        # (failure precedence, success downgrade of inner-env terminals) live
+        # in episode_end_flags — pure and unit-tested.
+        terminated, truncated = episode_end_flags(
+            self.training_config.get("done", {}).get("variables", {}),
+            info, terminated, truncated,
+        )
 
         self.episode_step += 1
         self.episode_reward += total_reward
@@ -476,19 +488,9 @@ class RetroDreamerWrapper(gym.Wrapper):
 
         return reward
 
-    def _check_done(self, info: Dict[str, Any]) -> bool:
-        done_config = self.training_config.get("done", {}).get("variables", {})
-
-        for var_name, var_cfg in done_config.items():
-            if var_name not in info:
-                continue
-            op = OP_ALIASES.get(var_cfg.get("op"), var_cfg.get("op"))
-            ref = var_cfg.get("reference", 0)
-            val = info[var_name]
-            if op == "less-than" and val < ref:
-                return True
-            elif op == "greater-than" and val > ref:
-                return True
-            elif op == "equal" and val == ref:
-                return True
-        return False
+    def _check_done(self, info: Dict[str, Any]):
+        """Return the first matched done variable's NAME (or None) — see
+        config_validation.check_done for the semantics and ordering rules."""
+        return check_done(
+            self.training_config.get("done", {}).get("variables", {}), info
+        )

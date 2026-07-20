@@ -19,7 +19,7 @@ _REWARD_VAR_KEYS = {
     "mode", "op", "reference", "max_speed", "max_value", "base_reward",
     "scaling_coefficient", "power", "min_threshold",
 }
-_DONE_VAR_KEYS = {"op", "reference"}
+_DONE_VAR_KEYS = {"op", "reference", "success"}
 _MILESTONE_KEYS = {"var", "op", "reference", "reward"}
 _NOVELTY_KEYS = {"keys", "reward"}
 _COUNTER_KEYS = {"var", "context", "reward", "decay", "max_per_context", "max_event_delta"}
@@ -206,6 +206,12 @@ def validate_training_config(game_id: str, cfg: dict, data_vars=None) -> None:
                 f"{where}: op '{op}' not recognized — use one of "
                 f"{sorted(set(OP_ALIASES.values()))} (or <, >, ==)"
             )
+        if "success" in var and not isinstance(var["success"], bool):
+            problems.append(
+                f"{where}: 'success' must be a boolean — it marks this done "
+                f"condition as a SUCCESSFUL episode end (emitted as truncated, "
+                f"value bootstraps) rather than a failure (terminated)."
+            )
 
     if problems:
         raise ValueError(
@@ -307,6 +313,64 @@ def resolve_action_mappings(action_defs: list, env_buttons: list, game_id: str):
             + "\n  - ".join(problems)
         )
     return rows, labels
+
+
+def check_done(done_config, info):
+    """Evaluate done conditions; return the FIRST matching variable name, or
+    None. Order matters and is the config's dict order (JSON order preserved):
+    list failure conditions (health, reverse) BEFORE success conditions
+    (race_on) so a crash that coincides with a success flag on the same step
+    is still classified as a death.
+
+    The caller maps the matched condition to the gymnasium 5-tuple via the
+    condition's optional "success" flag: success=True ends the episode as
+    TRUNCATED (the value function bootstraps — finishing a race is not death,
+    and the continue predictor must not learn 'finish line = terminal' and
+    smear that fear across visually identical non-final laps), anything else
+    is TERMINATED (true failure, value zero).
+
+    Pure function. Kept module-level so tests can drive it directly.
+    """
+    for var_name, var_cfg in (done_config or {}).items():
+        if var_name not in info:
+            continue
+        op = OP_ALIASES.get(var_cfg.get("op"), var_cfg.get("op"))
+        ref = var_cfg.get("reference", 0)
+        val = info[var_name]
+        if (
+            (op == "less-than" and val < ref)
+            or (op == "greater-than" and val > ref)
+            or (op == "equal" and val == ref)
+        ):
+            return var_name
+    return None
+
+
+def episode_end_flags(done_config, info, terminated, truncated):
+    """Map done-condition evaluation onto the gymnasium 5-tuple flags.
+
+    Takes the flags as already set by the inner env (frame-skip loop) and
+    returns the final (terminated, truncated) pair:
+    - no condition matched: flags pass through unchanged
+    - failure condition matched: terminated=True
+    - success condition matched ("success": true): truncated=True AND
+      terminated is forced False — this deliberately downgrades any
+      scenario.json-era terminal the inner env raised for the same frame,
+      because a successful episode end must bootstrap (the continue
+      predictor must not learn 'success screen = death').
+    check_done's first-match config ordering means failure conditions listed
+    before success ones win same-step ties (crash on the finish frame is
+    still a death).
+
+    Pure function — the wrapper delegates here so tests can drive the exact
+    production routing without an emulator.
+    """
+    matched = check_done(done_config, info)
+    if matched is None:
+        return terminated, truncated
+    if (done_config or {}).get(matched, {}).get("success"):
+        return False, True
+    return True, truncated
 
 
 def score_milestones(milestones_cfg, info, fired, baseline=False):
